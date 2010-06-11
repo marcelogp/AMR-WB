@@ -25,21 +25,26 @@
 #include "amrwbdata.h"
 
 typedef struct {
-    AMRWBFrame          frame;                  ///< AMRWB parameters decoded from bitstream
-    enum Mode           fr_cur_mode;            ///< mode index of current frame
-    uint8_t             fr_quality;             ///< frame quality index (FQI)
-    uint8_t             fr_mode_ind;            ///< mode indication field
-    uint8_t             fr_mode_req;            ///< mode request field
-    uint8_t             fr_crc;                 ///< crc for class A bits
-    float               isf_quant[LP_ORDER];    ///< current quantized ISF vector
-    float               isf_q_past[LP_ORDER];   ///< past quantized ISF vector
+    AMRWBFrame          frame;                      ///< AMRWB parameters decoded from bitstream
+    enum Mode           fr_cur_mode;                ///< mode index of current frame
+    uint8_t             fr_quality;                 ///< frame quality index (FQI)
+    uint8_t             fr_mode_ind;                ///< mode indication field
+    uint8_t             fr_mode_req;                ///< mode request field
+    uint8_t             fr_crc;                     ///< crc for class A bits
+    float               isf_quant[LP_ORDER];        ///< quantized ISF vector from current frame
+    float               isf_q_past[LP_ORDER];       ///< quantized ISF vector of the previous frame
+    double              isp[4][LP_ORDER];           ///< ISP vectors from current frame
+    double              isp_sub4_past[LP_ORDER];    ///< ISP vector for the 4th subframe of the previous frame
+
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
 {
     AMRWBContext *ctx = avctx->priv_data;
+    int i;
 
-    memcpy(ctx->isf_q_past, isf_init, LP_ORDER*sizeof(float));
+    for (i = 0; i < LP_ORDER; i++)
+        ctx->isf_q_past[i] = isf_init[i] / (float) (1 << 15);
     
     return 0;
 }
@@ -99,6 +104,20 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     }
     
     return mode;
+}
+
+/**
+ * Convert an ISF vector into an ISP vector.
+ *
+ * @param isf               input isf vector
+ * @param isp               output isp vector
+ */
+static void isf2isp(const float *isf, double *isp)
+{
+    int i;
+
+    for (i = 0; i < LP_ORDER; i++)
+        isp[i] = cos(2.0 * M_PI * isf[i]);
 }
 
 /**
@@ -189,6 +208,24 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
     }
 }
 
+/**
+ * Ensures a minimum distance between adjacent ISFs
+ * 
+ * @param isf                 [in/out] ISF vector
+ * @param min_spacing         [in] minimum gap to keep
+ * @param size                [in] ISF vector size
+ *
+ */
+static void isf_set_min_dist(float *isf, float min_spacing, int size) {
+    int i;
+    float prev = 0.0;
+    
+    for (i = 0; i < size; i++) {
+        isf[i] = FFMAX(isf[i], prev + min_spacing);
+        prev = isf[i];
+    }
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
@@ -216,11 +253,14 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     }
     
     isf_add_mean_and_past(ctx->isf_quant, ctx->isf_q_past);
+    isf_set_min_dist(ctx->isf_quant, MIN_ISF_SPACING, LP_ORDER);
+    
+    //isf2isp(ctx->isf_quant, ctx->isp[3]);
     
     return 0;
 }
 
-static int amrwb_decode_close(AVCodecContext *avctx) 
+static int amrwb_decode_close(AVCodecContext *avctx)
 {
     return 0;
 }
