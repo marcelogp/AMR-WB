@@ -1,7 +1,7 @@
 /*
  * AMR wideband data and definitions
  * Copyright (c) 2010 Marcelo Galvao Povoa
- 
+ *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -24,8 +24,8 @@
 
 #include <stdint.h>
 
-#define LP_ORDER 16           ///< linear predictive coding filter order
-
+#define LP_ORDER 16                           ///< linear predictive coding filter order
+#define MIN_ISF_SPACING    50.0               /* Taken from fixed-point 26.173, not sure */
 #define PRED_FACTOR (1.0/3.0)
 
 /* Mode ordering is sensitive, do not change */
