@@ -43,8 +43,10 @@ static int amrwb_decode_init(AVCodecContext *avctx)
     AMRWBContext *ctx = avctx->priv_data;
     int i;
 
-    for (i = 0; i < LP_ORDER; i++)
-        ctx->isf_q_past[i] = isf_init[i] / (float) (1 << 15);
+    for (i = 0; i < LP_ORDER; i++) {
+        ctx->isf_q_past[i]    = isf_init[i] / (float) (1 << 15);
+        ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
+    }
     
     return 0;
 }
@@ -52,9 +54,9 @@ static int amrwb_decode_init(AVCodecContext *avctx)
 /**
  * Parses a speech frame, storing data in the Context
  * 
- * @param c                 the context
- * @param buf               pointer to the input buffer
- * @param buf_size          size of the input buffer
+ * @param c                 [in/out] the context
+ * @param buf               [in] pointer to the input buffer
+ * @param buf_size          [in] size of the input buffer
  *
  * @return the frame mode
  */
@@ -154,9 +156,9 @@ static void decode_isf_indices_36b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
 /**
  * Decodes quantized ISF vectors using 46-bit indices (except 6K60 mode) 
  * 
- * @param ind               [in] array of 7 indices
- * @param isf_q             [out] isf_q[LP_ORDER]
- * @param fr_q              [in] frame quality (good frame == 1)
+ * @param ind                 [in] array of 7 indices
+ * @param isf_q               [out] isf_q[LP_ORDER]
+ * @param fr_q                [in] frame quality (good frame == 1)
  *
  */
 static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
@@ -182,7 +184,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
             isf_q[i + 9] = isf_q[i + 9] + dico24_isf[ind[5]][i] / (float) (1<<15);
         }
         for (i = 0; i < 4; i++) {
-            isf_q[i + 12] = isf_q[i + 12] + dico25_isf[ind[6]][i] / (float) (1<<15);  
+            isf_q[i + 12] = isf_q[i + 12] + dico25_isf[ind[6]][i] / (float) (1<<15);
         }
     }
     /* not implemented for bad frame */
@@ -202,7 +204,7 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
     
     for (i = 0; i < LP_ORDER; i++) {
         tmp = isf_q[i];
-        isf_q[i] = tmp + isf_mean[i];
+        isf_q[i] = tmp + isf_mean[i] / (float) (1<<15);
         isf_q[i] = isf_q[i] + PRED_FACTOR * isf_past[i];
         isf_past[i] = tmp;
     }
@@ -224,6 +226,28 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
         isf[i] = FFMAX(isf[i], prev + min_spacing);
         prev = isf[i];
     }
+}
+
+/**
+ * Interpolate the fourth ISP vector from current and past frame
+ * to obtain a ISP vector for each subframe
+ *
+ * @param isp_q               [in/out] ISPs for each subframe
+ * @param isp4_past           [in] Past ISP for subframe 4
+ */
+static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
+{
+    int i;
+    /* Did not used ff_weighted_vector_sumf because using double */
+    
+    for (i = 0; i < LP_ORDER; i++)
+        isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
+        
+    for (i = 0; i < LP_ORDER; i++)
+        isp_q[1][i] = 0.20 * isp4_past[i] + 0.80 * isp_q[3][i];
+        
+    for (i = 0; i < LP_ORDER; i++)
+        isp_q[2][i] = 0.04 * isp4_past[i] + 0.96 * isp_q[3][i];
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
@@ -255,7 +279,12 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     isf_add_mean_and_past(ctx->isf_quant, ctx->isf_q_past);
     isf_set_min_dist(ctx->isf_quant, MIN_ISF_SPACING, LP_ORDER);
     
-    //isf2isp(ctx->isf_quant, ctx->isp[3]);
+    isf2isp(ctx->isf_quant, ctx->isp[3]);
+    /* Generate a ISP vector for each subframe */
+    interpolate_isp(ctx->isp, ctx->isp_sub4_past);
+    
+    //update state for next frame
+    memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0])); 
     
     return 0;
 }
