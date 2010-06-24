@@ -37,8 +37,9 @@ typedef struct {
     double              isp[4][LP_ORDER];           ///< ISP vectors from current frame
     double              isp_sub4_past[LP_ORDER];    ///< ISP vector for the 4th subframe of the previous frame
     
-    float               lp_coef[4][LP_ORDER];          ///< Linear Prediction Coefficients from ISP vector
+    float               lp_coef[4][LP_ORDER];       ///< Linear Prediction Coefficients from ISP vector
 
+    uint8_t             base_pitch_lag;             ///< integer part of pitch lag for next relative subframe
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -285,6 +286,106 @@ static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
     lp2[lp_half_order] = last_isp;
 }
 
+/**
+ * Decode a adaptive codebook index into pitch lag (except 6k60, 8k85 modes)
+ * Calculate (nearest) integer lag and fractional lag using 1/4 resolution
+ * In 1st and 3rd subframes index is relative to last subframe integer lag
+ *
+ * @param lag_int             [out] Decoded integer pitch lag
+ * @param lag_frac            [out] Decoded fractional pitch lag
+ * @param pitch_index         [in] Adaptive codebook pitch index
+ * @param base_lag_int        [in/out] Base integer lag used in relative subframes
+ * @param subframe            [in] Current subframe index (0 to 3)
+ */
+static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
+                                  uint8_t *base_lag_int, const int subframe)
+{
+    if (subframe == 0 || subframe == 2) {
+        if (pitch_index < 376) {
+            *lag_int  = (pitch_index + 137) >> 2;
+            *lag_frac = pitch_index - (*lag_int << 2) + 136;
+        } else if (pitch_index < 440) {
+            *lag_int  = (pitch_index + 257 - 376) >> 1;
+            *lag_frac = (pitch_index - (*lag_int << 1) + 256 - 376) << 1;
+            /* the actual resolution is 1/2 but expressed as 1/4 */
+        } else {
+            *lag_int  = pitch_index - 280;
+            *lag_frac = 0;
+        }
+        *base_lag_int = *lag_int; // store previous lag
+    } else {
+        *lag_int  = (pitch_index + 1) >> 2;
+        *lag_frac = pitch_index - (*lag_int << 2);
+        *lag_int += *base_lag_int - 8;
+        /* Doesn't seem to need bounding according to TS 26.190 */ 
+    }
+}
+
+/**
+ * Decode a adaptive codebook index into pitch lag for 8k85 mode
+ * Description is analogous to decode_pitch_lag_high
+ */
+static void decode_pitch_lag_8K85(int *lag_int, int *lag_frac, int pitch_index,
+                                  uint8_t *base_lag_int, const int subframe)
+{
+    if (subframe == 0 || subframe == 2) {
+        if (pitch_index < 116) {
+            *lag_int  = (pitch_index + 69) >> 1;
+            *lag_frac = (pitch_index - (*lag_int << 1) + 68) << 1;
+        } else {
+            *lag_int  = pitch_index - 24;
+            *lag_frac = 0;
+        }
+        *base_lag_int = *lag_int;
+    } else {
+        *lag_int  = (pitch_index + 1) >> 1;
+        *lag_frac = pitch_index - (*lag_int << 1);
+        *lag_int += *base_lag_int - 8;
+    }
+}
+
+/**
+ * Decode a adaptive codebook index into pitch lag for 6k60 mode
+ * Description is analogous to decode_pitch_lag_high, but relative
+ * index is used for all subframes except the first
+ */
+static void decode_pitch_lag_6K60(int *lag_int, int *lag_frac, int pitch_index,
+                                  uint8_t *base_lag_int, const int subframe)
+{
+    if (subframe == 0) {
+        if (pitch_index < 116) {
+            *lag_int  = (pitch_index + 69) >> 1;
+            *lag_frac = (pitch_index - (*lag_int << 1) + 68) << 1;
+        } else {
+            *lag_int  = pitch_index - 24;
+            *lag_frac = 0;
+        }
+        *base_lag_int = *lag_int;
+    } else {
+        *lag_int  = (pitch_index + 1) >> 1;
+        *lag_frac = pitch_index - (*lag_int << 1);
+        *lag_int += *base_lag_int - 8;
+    }
+}
+
+static void decode_pitch_vector(AMRWBContext *ctx,
+                                const AMRWBSubFrame *amr_subframe,
+                                const int subframe)
+{
+    int pitch_lag_int, pitch_lag_frac;
+    enum Mode mode = ctx->fr_cur_mode;
+    
+    if (mode == MODE_6k60) {
+        decode_pitch_lag_6K60(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
+                              &ctx->base_pitch_lag, subframe);
+    } else if (mode == MODE_8k85) {
+        decode_pitch_lag_8K85(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
+                              &ctx->base_pitch_lag, subframe);
+    } else
+        decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
+                              &ctx->base_pitch_lag, subframe);
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
@@ -292,7 +393,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     AMRWBFrame   *cf   = &ctx->frame;  
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
-    int i;
+    int sub;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
     
@@ -319,8 +420,14 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     /* Generate a ISP vector for each subframe */
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
     
-    for (i=0; i<4; i++)
-        isp2lp(ctx->isp[i], ctx->lp_coef[i], LP_ORDER/2);
+    for (sub = 0; sub < 4; sub++)
+        isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
+        
+    for (sub = 0; sub < 4; sub++) {
+        const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
+
+        decode_pitch_vector(ctx, cur_subframe, sub);
+    }
     
     //update state for next frame
     memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0])); 
