@@ -22,24 +22,30 @@
 #include "avcodec.h"
 #include "get_bits.h"
 #include "lsp.h"
+#include "acelp_filters.h"
 
 #include "amrwbdata.h"
 
 typedef struct {
-    AMRWBFrame          frame;                      ///< AMRWB parameters decoded from bitstream
-    enum Mode           fr_cur_mode;                ///< mode index of current frame
-    uint8_t             fr_quality;                 ///< frame quality index (FQI)
-    uint8_t             fr_mode_ind;                ///< mode indication field
-    uint8_t             fr_mode_req;                ///< mode request field
-    uint8_t             fr_crc;                     ///< crc for class A bits
-    float               isf_quant[LP_ORDER];        ///< quantized ISF vector from current frame
-    float               isf_q_past[LP_ORDER];       ///< quantized ISF vector of the previous frame
-    double              isp[4][LP_ORDER];           ///< ISP vectors from current frame
-    double              isp_sub4_past[LP_ORDER];    ///< ISP vector for the 4th subframe of the previous frame
+    AMRWBFrame                             frame; ///< AMRWB parameters decoded from bitstream
+    enum Mode                        fr_cur_mode; ///< mode index of current frame
+    uint8_t                           fr_quality; ///< frame quality index (FQI)
+    uint8_t                          fr_mode_ind; ///< mode indication field
+    uint8_t                          fr_mode_req; ///< mode request field
+    uint8_t                               fr_crc; ///< crc for class A bits
+    float                    isf_quant[LP_ORDER]; ///< quantized ISF vector from current frame
+    float                   isf_q_past[LP_ORDER]; ///< quantized ISF vector of the previous frame
+    double                      isp[4][LP_ORDER]; ///< ISP vectors from current frame
+    double               isp_sub4_past[LP_ORDER]; ///< ISP vector for the 4th subframe of the previous frame
     
-    float               lp_coef[4][LP_ORDER];       ///< Linear Prediction Coefficients from ISP vector
+    float                   lp_coef[4][LP_ORDER]; ///< Linear Prediction Coefficients from ISP vector
 
-    uint8_t             base_pitch_lag;             ///< integer part of pitch lag for next relative subframe
+    uint8_t                       base_pitch_lag; ///< integer part of pitch lag for next relative subframe
+    
+    float excitation_buf[PITCH_MAX + LP_ORDER + 1 + AMRWB_SUBFRAME_SIZE]; ///< current excitation and all necessary excitation history
+    float                            *excitation; ///< points to current excitation in excitation_buf[]
+    
+    float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -288,7 +294,7 @@ static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
 
 /**
  * Decode a adaptive codebook index into pitch lag (except 6k60, 8k85 modes)
- * Calculate (nearest) integer lag and fractional lag using 1/4 resolution
+ * Calculate (nearest) integer lag and fractional lag always using 1/4 resolution
  * In 1st and 3rd subframes index is relative to last subframe integer lag
  *
  * @param lag_int             [out] Decoded integer pitch lag
@@ -384,6 +390,17 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     } else
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
+                              
+     pitch_lag_int += pitch_lag_frac > 0;
+     
+    /* Calculate the pitch vector by interpolating the past excitation at the
+       pitch lag using a hamming windowed sinc function. */
+    ff_acelp_interpolatef(ctx->excitation, ctx->excitation + 1 - pitch_lag_int,
+                          ac_inter, 4,
+                          pitch_lag_frac + 4 - 4*(pitch_lag_frac > 0),
+                          LP_ORDER, AMRWB_SUBFRAME_SIZE);
+
+    memcpy(ctx->pitch_vector, ctx->excitation, AMRWB_SUBFRAME_SIZE * sizeof(float));
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,

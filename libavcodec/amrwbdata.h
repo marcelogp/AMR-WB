@@ -24,9 +24,12 @@
 
 #include <stdint.h>
 
-#define LP_ORDER 16                           ///< linear predictive coding filter order
-#define MIN_ISF_SPACING    50.0               /* Taken from fixed-point 26.173, not sure */
-#define PRED_FACTOR (1.0/3.0)
+#define LP_ORDER              16               ///< linear predictive coding filter order
+#define MIN_ISF_SPACING       50.0             /* Taken from fixed-point 26.173, not sure */
+#define PRED_FACTOR           (1.0/3.0)
+
+#define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe
+#define PITCH_MAX             231              ///< maximum received pitch delay value
 
 /* Mode ordering is sensitive, do not change */
 enum Mode {
@@ -1595,6 +1598,28 @@ static const int16_t isf_init[LP_ORDER] = {
 static const int16_t isp_init[LP_ORDER] = {
   32138,  30274,  27246,  23170,  18205,  12540,   6393,    0,
   -6393, -12540, -18205, -23170, -27246, -30274, -32138, 1475
+};
+
+/* Coefficients for FIR interpolation of excitation vector
+ * at pitch lag resulting the adaptive codebook vector */
+static const float ac_inter[65] = {
+   0.940000,
+   0.856390,   0.632268,   0.337560,   0.059072,
+  -0.131059,  -0.199393,  -0.158569,  -0.056359,
+   0.047606,   0.106749,   0.103705,   0.052062,
+  -0.015182,  -0.063705,  -0.073660,  -0.046497,
+  -0.000983,   0.038227,   0.053143,   0.040059,
+   0.009308,  -0.021674,  -0.037767,  -0.033186,
+  -0.013028,   0.010702,   0.025901,   0.026318,
+   0.013821,  -0.003645,  -0.016813,  -0.019855,
+  -0.012766,  -0.000530,   0.010080,   0.014122,
+   0.010657,   0.002594,  -0.005363,  -0.009344,
+  -0.008101,  -0.003182,   0.002330,   0.005635,
+   0.005562,   0.002844,  -0.000627,  -0.002993,
+  -0.003362,  -0.002044,  -0.000116,   0.001315,
+   0.001692,   0.001151,   0.000259,  -0.000417,
+  -0.000618,  -0.000434,  -0.000133,   0.000063,
+   0.000098,   0.000048,   0.000007,   0.000000
 };
 
 /* Core frame sizes in each mode */
