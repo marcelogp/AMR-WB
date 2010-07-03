@@ -52,6 +52,8 @@ static int amrwb_decode_init(AVCodecContext *avctx)
 {
     AMRWBContext *ctx = avctx->priv_data;
     int i;
+    
+    ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
 
     for (i = 0; i < LP_ORDER; i++) {
         ctx->isf_q_past[i]    = isf_init[i] / (float) (1 << 15);
@@ -379,6 +381,8 @@ static void decode_pitch_vector(AMRWBContext *ctx,
                                 const int subframe)
 {
     int pitch_lag_int, pitch_lag_frac;
+    int i;
+    float *exc = ctx->excitation;
     enum Mode mode = ctx->fr_cur_mode;
     
     if (mode == MODE_6k60) {
@@ -395,12 +399,18 @@ static void decode_pitch_vector(AMRWBContext *ctx,
      
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
-    ff_acelp_interpolatef(ctx->excitation, ctx->excitation + 1 - pitch_lag_int,
+    ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int,
                           ac_inter, 4,
                           pitch_lag_frac + 4 - 4*(pitch_lag_frac > 0),
                           LP_ORDER, AMRWB_SUBFRAME_SIZE);
 
-    memcpy(ctx->pitch_vector, ctx->excitation, AMRWB_SUBFRAME_SIZE * sizeof(float));
+    /* Check which pitch signal path should be used */
+    if (amr_subframe->ltp) {
+        memcpy(ctx->pitch_vector, exc, AMRWB_SUBFRAME_SIZE * sizeof(float));
+    } else {
+        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            ctx->pitch_vector[i] = 0.18 * exc[i - 1] + 0.64 * exc[i] + 0.18 * exc[i + 1];
+    }
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
@@ -452,11 +462,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     return 0;
 }
 
-static int amrwb_decode_close(AVCodecContext *avctx)
-{
-    return 0;
-}
-
 AVCodec amrwb_decoder =
 {
     .name           = "amrwb",
@@ -464,7 +469,6 @@ AVCodec amrwb_decoder =
     .id             = CODEC_ID_AMR_WB,
     .priv_data_size = sizeof(AMRWBContext),
     .init           = amrwb_decode_init,
-    .close          = amrwb_decode_close,
     .decode         = amrwb_decode_frame,
     .long_name      = NULL_IF_CONFIG_SMALL("Adaptive Multi-Rate WideBand"),
 };
