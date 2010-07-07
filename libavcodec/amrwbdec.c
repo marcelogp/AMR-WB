@@ -23,8 +23,15 @@
 #include "get_bits.h"
 #include "lsp.h"
 #include "acelp_filters.h"
+#include "acelp_vectors.h"
 
 #include "amrwbdata.h"
+
+/** Get x bits in the index interval [lsb,lsb+len-1] inclusive */
+#define BIT_STR(x,lsb,len) (((x) >> (lsb)) & ((1 << (len)) - 1))
+
+/** Get the bit at specified position */
+#define BIT_POS(x, p) (((x) >> (p)) & 1)
 
 typedef struct {
     AMRWBFrame                             frame; ///< AMRWB parameters decoded from bitstream
@@ -413,6 +420,101 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     }
 }
 
+/**
+ * The next six functions decode_[i]p_track decode exactly i pulses
+ * positions and amplitudes (-1 or 1) in a subframe track using
+ * an encoded pulse indexing (TS 26.190 section 5.8.2).
+ *
+ * The results are given in out[], in which a negative number means
+ * amplitude -1 and vice-versa. (i.e., ampl = x/abs(x) )
+ *
+ * @param out                 [out] Output buffer (writes i elements)
+ * @param code                [in] Pulse index (no. of bits varies, see below)
+ * @param m                   [in] (log2) Number of potential positions
+ */
+//XXX : Some of these functions are simple and recurrent (used inline)
+
+static inline void decode_1p_track(int *out, int code, int m) ///code: m+1 bits
+{
+    int pos = BIT_STR(code, 0, m);
+    
+    out[0] = BIT_POS(code, m) ? -pos : pos;
+}
+
+static inline void decode_2p_track(int *out, int code, int m) ///code: 2m+1 bits
+{
+    int pos0 = BIT_STR(code, m, m);
+    int pos1 = BIT_STR(code, 0, m);
+    
+    out[0] = BIT_POS(code, 2*m) ? -pos0 : pos0;
+    out[1] = BIT_POS(code, 2*m) ? -pos1 : pos1;
+    out[1] = pos0 > pos1 ? -out[1] : out[1];
+}
+
+static void decode_3p_track(int *out, int code, int m)        ///code: 3m+1 bits 
+{
+    int half_2p = BIT_POS(code, 2*m-1) << (m-1);
+    
+    decode_2p_track(out, BIT_STR(code, 0, 2*m-1), m-1);
+    // put two decoded pulses (+ or -) in the correct half
+    out[0] += (out[0] > 0) ? half_2p : -half_2p; 
+    out[1] += (out[1] > 0) ? half_2p : -half_2p;
+    decode_1p_track(out + 2, BIT_STR(code, 2*m, m+1), m);
+}
+
+/**
+ * Decode the algebraic codebook index to pulse positions and signs,
+ * then construct the algebraic codebook vector.
+ *
+ * @param fixed_sparse        pointer to the algebraic (innovative) codebook
+ * @param pulse_hi            MSBs part of the pulse index array (used in higher modes)
+ * @param pulse_lo            LSBs part of the pulse index array
+ * @param mode                mode of the current frame
+ */
+// For now, uses the same AMRFixed struct from AMR-NB but
+// the maximum number of pulses in it was increased to 24
+static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi,
+                                const uint16_t *pulse_lo, const enum Mode mode)
+{
+    /* sig_pos stores for each track the decoded pulse position
+     * indexes multiplied by its corresponding amplitude (+1 or -1) */
+    int sig_pos[4][6];
+    int pulses_nb = 0;
+    int spacing = (mode == MODE_6k60) ? 2 : 4;
+    int i, j;
+    
+    switch (mode) {
+        case MODE_6k60:
+            for (i = 0; i < 2; i++)
+                decode_1p_track(sig_pos[i], pulse_lo[i], 5);
+            break;
+        case MODE_8k85:
+            for (i = 0; i < 4; i++)
+                decode_1p_track(sig_pos[i], pulse_lo[i], 4);
+            break;
+        case MODE_12k65:
+            for (i = 0; i < 4; i++)
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4);
+            break;
+        case MODE_14k25:
+            for (i = 0; i < 2; i++)
+                decode_3p_track(sig_pos[i], pulse_lo[i], 4);
+            for (i = 2; i < 4; i++)
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4);
+            break;
+    }
+
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < pulses_nb_per_mode_tr[mode][i]; j++) {
+            int pos = sig_pos[i][j];
+            fixed_sparse->x[pulses_nb] = FFABS(pos) * spacing + i;
+            fixed_sparse->y[pulses_nb] = pos < 0 ? -1.0 : 1.0;
+            pulses_nb++;
+        }
+    
+    fixed_sparse->n = pulses_nb;
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
@@ -420,6 +522,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     AMRWBFrame   *cf   = &ctx->frame;  
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
+    AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
     int sub;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
@@ -454,6 +557,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
 
         decode_pitch_vector(ctx, cur_subframe, sub);
+        
+        decode_fixed_sparse(&fixed_sparse, cur_subframe->pul_ih,
+                            cur_subframe->pul_il, ctx->fr_cur_mode);
     }
     
     //update state for next frame

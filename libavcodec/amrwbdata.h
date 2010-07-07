@@ -1637,6 +1637,13 @@ static const float ac_inter[65] = {
    0.000098,   0.000048,   0.000007,   0.000000
 };
 
+/* [i][j] is the number of pulses in track j at mode i */
+static const int pulses_nb_per_mode_tr[][4] = {
+    {1, 1, 0, 0}, {1, 1, 1, 1}, {2, 2, 2, 2},
+    {3, 3, 2, 2}, {3, 3, 3, 3}, {4, 4, 4, 4},
+    {5, 5, 4, 4}, {6, 6, 6, 6}, {6, 6, 6, 6}
+};
+
 /* Core frame sizes in each mode */
 static const uint16_t cf_sizes_wb[] = {
     132, 177, 253, 285, 317, 365, 397, 461, 477,
