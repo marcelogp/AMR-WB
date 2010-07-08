@@ -25,7 +25,7 @@
 #include <stdint.h>
 
 #define LP_ORDER              16               ///< linear predictive coding filter order
-#define MIN_ISF_SPACING       50.0             /* Taken from fixed-point 26.173, not sure */
+#define MIN_ISF_SPACING       50.0             /* XXX: Taken from fixed-point 26.173, not sure */
 #define PRED_FACTOR           (1.0/3.0)
 
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe
