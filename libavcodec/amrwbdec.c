@@ -431,35 +431,70 @@ static void decode_pitch_vector(AMRWBContext *ctx,
  * @param out                 [out] Output buffer (writes i elements)
  * @param code                [in] Pulse index (no. of bits varies, see below)
  * @param m                   [in] (log2) Number of potential positions
+ * @param off                 [in] Offset for decoded positions
  */
 //XXX: Some of these functions are simple and recurrent (used inline)
 
-static inline void decode_1p_track(int *out, int code, int m) ///code: m+1 bits
-{
-    int pos = BIT_STR(code, 0, m);
+static inline void decode_1p_track(int *out, int code, int m, int off)
+{   ///code: m+1 bits
+    int pos = BIT_STR(code, 0, m) + off;
     
     out[0] = BIT_POS(code, m) ? -pos : pos;
 }
 
-static inline void decode_2p_track(int *out, int code, int m) ///code: 2m+1 bits
-{
-    int pos0 = BIT_STR(code, m, m);
-    int pos1 = BIT_STR(code, 0, m);
+static inline void decode_2p_track(int *out, int code, int m, int off)
+{   ///code: 2m+1 bits
+    int pos0 = BIT_STR(code, m, m) + off;
+    int pos1 = BIT_STR(code, 0, m) + off;
     
     out[0] = BIT_POS(code, 2*m) ? -pos0 : pos0;
     out[1] = BIT_POS(code, 2*m) ? -pos1 : pos1;
     out[1] = pos0 > pos1 ? -out[1] : out[1];
 }
 
-static void decode_3p_track(int *out, int code, int m)        ///code: 3m+1 bits 
-{
-    int half_2p = BIT_POS(code, 2*m-1) << (m-1);
+static void decode_3p_track(int *out, int code, int m, int off)
+{   ///code: 3m+1 bits
+    int half_2p = BIT_POS(code, 2*m - 1) << (m - 1);
     
-    decode_2p_track(out, BIT_STR(code, 0, 2*m-1), m-1);
-    // put two decoded pulses (+ or -) in the correct half
-    out[0] += (out[0] > 0) ? half_2p : -half_2p; 
-    out[1] += (out[1] > 0) ? half_2p : -half_2p;
-    decode_1p_track(out + 2, BIT_STR(code, 2*m, m+1), m);
+    decode_2p_track(out, BIT_STR(code, 0, 2*m - 1), m - 1, off + half_2p);
+    decode_1p_track(out + 2, BIT_STR(code, 2*m, m + 1), m, off);
+}
+
+static void decode_4p_track(int *out, int code, int m, int off)
+{   ///code: 4m bits
+    int half_4p, subhalf_2p;
+    int b_offset = 1 << (m - 1);
+    
+    switch (BIT_STR(code, 4*m - 2, 2)) /* case ID (2 bits) */
+    {
+        case 0: /* 0 pulses in A, 4 pulses in B or vice-versa */
+            half_4p = BIT_POS(code, 4*m - 3) << (m - 1); /* which has 4 pulses */
+            subhalf_2p = BIT_POS(code, 2*m - 3) << (m - 2);
+            
+            decode_2p_track(out, BIT_STR(code, 0, 2*m - 3),
+                            m - 2, off + half_4p + subhalf_2p);
+            decode_2p_track(out + 2, BIT_STR(code, 2*m - 2, 2*m - 1),
+                            m - 1, off + half_4p);
+            break;
+        case 1: /* 1 pulse in A, 3 pulses in B */
+            decode_1p_track(out, BIT_STR(code,  3*m - 2, m),
+                            m - 1, off);
+            decode_3p_track(out + 1, BIT_STR(code, 0, 3*m - 2),
+                            m - 1, off + b_offset);
+            break;
+        case 2: /* 2 pulses in each half */
+            decode_2p_track(out, BIT_STR(code, 2*m - 1, 2*m - 1),
+                            m - 1, off);
+            decode_2p_track(out + 2, BIT_STR(code, 0, 2*m - 1),
+                            m - 1, off + b_offset);
+            break;
+        case 3: /* 3 pulses in A, 1 pulse in B */
+            decode_3p_track(out, BIT_STR(code, m, 3*m - 2),
+                            m - 1, off);
+            decode_1p_track(out + 3, BIT_STR(code, 0, m),
+                            m - 1, off + b_offset);
+            break;
+    }
 }
 
 /**
@@ -486,21 +521,30 @@ static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi
     switch (mode) {
         case MODE_6k60:
             for (i = 0; i < 2; i++)
-                decode_1p_track(sig_pos[i], pulse_lo[i], 5);
+                decode_1p_track(sig_pos[i], pulse_lo[i], 5, 0);
             break;
         case MODE_8k85:
             for (i = 0; i < 4; i++)
-                decode_1p_track(sig_pos[i], pulse_lo[i], 4);
+                decode_1p_track(sig_pos[i], pulse_lo[i], 4, 0);
             break;
         case MODE_12k65:
             for (i = 0; i < 4; i++)
-                decode_2p_track(sig_pos[i], pulse_lo[i], 4);
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 0);
             break;
         case MODE_14k25:
             for (i = 0; i < 2; i++)
-                decode_3p_track(sig_pos[i], pulse_lo[i], 4);
+                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 0);
             for (i = 2; i < 4; i++)
-                decode_2p_track(sig_pos[i], pulse_lo[i], 4);
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 0);
+            break;
+        case MODE_15k85:
+            for (i = 0; i < 4; i++)
+                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 0);
+            break;
+        case MODE_18k25:
+            for (i = 0; i < 4; i++)
+                decode_4p_track(sig_pos[i], (int) pulse_lo[i] + 
+                               ((int) pulse_hi[i] << 14), 4, 0);
             break;
     }
 
