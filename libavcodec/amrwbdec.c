@@ -98,7 +98,7 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     /* AMR-WB Auxiliary Information */
     ctx->fr_mode_ind = get_bits(&gb, 4);
     ctx->fr_mode_req = get_bits(&gb, 4);
-    ///Need to check conformity in mode_ind/mode_req and crc?
+    //XXX: Need to check conformity in mode_ind/mode_req and crc?
     ctx->fr_crc = get_bits(&gb, 8);
     
     data = (uint16_t *) &ctx->frame;
@@ -257,7 +257,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
 static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
 {
     int i;
-    /* Did not used ff_weighted_vector_sumf because using double */
+    /* XXX: Did not used ff_weighted_vector_sumf because using double */
     
     for (i = 0; i < LP_ORDER; i++)
         isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
@@ -281,7 +281,7 @@ static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
     double pa[MAX_LP_HALF_ORDER+1], qa[MAX_LP_HALF_ORDER+1];
     float *lp2 = lp + (lp_half_order << 1);
     double last_isp = isp[2 * lp_half_order - 1];
-    double qa_old = 0; /* qa[i-2] assuming qa[-1] = 0, not mentioned in document */ 
+    double qa_old = 0; /* XXX: qa[i-2] assuming qa[-1] = 0, not mentioned in document */ 
     int i;
     
     ff_lsp2polyf(isp,     pa, lp_half_order);
@@ -332,7 +332,7 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
         *lag_int  = (pitch_index + 1) >> 2;
         *lag_frac = pitch_index - (*lag_int << 2);
         *lag_int += *base_lag_int - 8;
-        /* Doesn't seem to need bounding according to TS 26.190 */ 
+        /* XXX: Doesn't seem to need bounding according to TS 26.190 */ 
     }
 }
 
@@ -432,7 +432,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
  * @param code                [in] Pulse index (no. of bits varies, see below)
  * @param m                   [in] (log2) Number of potential positions
  */
-//XXX : Some of these functions are simple and recurrent (used inline)
+//XXX: Some of these functions are simple and recurrent (used inline)
 
 static inline void decode_1p_track(int *out, int code, int m) ///code: m+1 bits
 {
@@ -471,7 +471,7 @@ static void decode_3p_track(int *out, int code, int m)        ///code: 3m+1 bits
  * @param pulse_lo            LSBs part of the pulse index array
  * @param mode                mode of the current frame
  */
-// For now, uses the same AMRFixed struct from AMR-NB but
+// XXX: For now, uses the same AMRFixed struct from AMR-NB but
 // the maximum number of pulses in it was increased to 24
 static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi,
                                 const uint16_t *pulse_lo, const enum Mode mode)
@@ -556,8 +556,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
 
+        /* Decode adaptive codebook */
         decode_pitch_vector(ctx, cur_subframe, sub);
-        
+        /* Decode innovative codebook */
         decode_fixed_sparse(&fixed_sparse, cur_subframe->pul_ih,
                             cur_subframe->pul_il, ctx->fr_cur_mode);
     }
