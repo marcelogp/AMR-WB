@@ -53,6 +53,8 @@ typedef struct {
     float                            *excitation; ///< points to current excitation in excitation_buf[]
     
     float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
+    
+    float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes 
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -548,10 +550,10 @@ static void decode_6p_track(int *out, int code, int m, int off)
  * Decode the algebraic codebook index to pulse positions and signs,
  * then construct the algebraic codebook vector.
  *
- * @param fixed_sparse        pointer to the algebraic (innovative) codebook
- * @param pulse_hi            MSBs part of the pulse index array (used in higher modes)
- * @param pulse_lo            LSBs part of the pulse index array
- * @param mode                mode of the current frame
+ * @param fixed_sparse        [out] pointer to the algebraic (innovative) codebook
+ * @param pulse_hi            [in] MSBs part of the pulse index array (higher modes only)
+ * @param pulse_lo            [in] LSBs part of the pulse index array
+ * @param mode                [in] mode of the current frame
  */
 // XXX: For now, uses the same AMRFixed struct from AMR-NB but
 // the maximum number of pulses in it was increased to 24
@@ -620,6 +622,28 @@ static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi
     fixed_sparse->n = pulses_nb;
 }
 
+/**
+ * Decode pitch gain and fixed gain correction factor
+ *
+ * @param vq_gain             [in] vector-quantized index for gains
+ * @param mode                [in] mode of the current frame
+ * @param fixed_gain_factor   [out] decoded fixed gain correction factor
+ * @param pitch_gain          [out] decoded pitch gain
+ */
+static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
+                         float *fixed_gain_factor, float *pitch_gain)
+{
+    const int16_t *gains;
+    
+    if (mode == MODE_6k60 || mode == MODE_8k85)
+        gains = qua_gain_6b[vq_gain];
+    else
+        gains = qua_gain_7b[vq_gain];
+    
+    *pitch_gain        = gains[0] * (1.0 / 16384.0);
+    *fixed_gain_factor = gains[1] * (1.0 / 2048.0);
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
@@ -628,6 +652,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
+    float fixed_gain_factor;                 // fixed gain correction factor (gamma)
     int sub;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
@@ -663,9 +688,12 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         /* Decode adaptive codebook */
         decode_pitch_vector(ctx, cur_subframe, sub);
-        /* Decode innovative codebook */
+        /* Decode innovative codebook (sparse representation) */
         decode_fixed_sparse(&fixed_sparse, cur_subframe->pul_ih,
                             cur_subframe->pul_il, ctx->fr_cur_mode);
+
+        decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
+                     &fixed_gain_factor, &ctx->pitch_gain[4]);
     }
     
     //update state for next frame
