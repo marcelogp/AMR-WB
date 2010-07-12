@@ -22,6 +22,7 @@
 #include "avcodec.h"
 #include "get_bits.h"
 #include "lsp.h"
+#include "celp_math.h"
 #include "acelp_filters.h"
 #include "acelp_vectors.h"
 
@@ -48,13 +49,18 @@ typedef struct {
     float                   lp_coef[4][LP_ORDER]; ///< Linear Prediction Coefficients from ISP vector
 
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for next relative subframe
+    uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
     
     float excitation_buf[PITCH_MAX + LP_ORDER + 1 + AMRWB_SUBFRAME_SIZE]; ///< current excitation and all necessary excitation history
     float                            *excitation; ///< points to current excitation in excitation_buf[]
     
     float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
+    float      fixed_vector[AMRWB_SUBFRAME_SIZE]; ///< algebraic codebook (fixed) vector
     
-    float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes 
+    float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes
+    float                          fixed_gain[5]; ///< quantified fixed gains for the current and previous four subframes
+    
+    float                              tilt_coef; ///< {beta_1} related to the voicing of the previous subframe
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -100,7 +106,7 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     /* AMR-WB Auxiliary Information */
     ctx->fr_mode_ind = get_bits(&gb, 4);
     ctx->fr_mode_req = get_bits(&gb, 4);
-    //XXX: Need to check conformity in mode_ind/mode_req and crc?
+    // XXX: Need to check conformity in mode_ind/mode_req and crc?
     ctx->fr_crc = get_bits(&gb, 8);
     
     data = (uint16_t *) &ctx->frame;
@@ -212,7 +218,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
 }
 
 /**
- * Apply mean and past ISF values using the predicion factor 
+ * Apply mean and past ISF values using the prediction factor
  * Updates past ISF vector
  * 
  * @param isf_q               [in] current quantized ISF
@@ -259,7 +265,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
 static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
 {
     int i;
-    /* XXX: Did not used ff_weighted_vector_sumf because using double */
+    // XXX: Did not used ff_weighted_vector_sumf because using double
     
     for (i = 0; i < LP_ORDER; i++)
         isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
@@ -283,7 +289,7 @@ static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
     double pa[MAX_LP_HALF_ORDER+1], qa[MAX_LP_HALF_ORDER+1];
     float *lp2 = lp + (lp_half_order << 1);
     double last_isp = isp[2 * lp_half_order - 1];
-    double qa_old = 0; /* XXX: qa[i-2] assuming qa[-1] = 0, not mentioned in document */ 
+    double qa_old = 0; // XXX: qa[i-2] assuming qa[-1] = 0, not mentioned in spec
     int i;
     
     ff_lsp2polyf(isp,     pa, lp_half_order);
@@ -334,7 +340,7 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
         *lag_int  = (pitch_index + 1) >> 2;
         *lag_frac = pitch_index - (*lag_int << 2);
         *lag_int += *base_lag_int - 8;
-        /* XXX: Doesn't seem to need bounding according to TS 26.190 */ 
+        // XXX: Doesn't seem to need bounding according to TS 26.190
     }
 }
 
@@ -391,7 +397,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
 {
     int pitch_lag_int, pitch_lag_frac;
     int i;
-    float *exc = ctx->excitation;
+    float *exc     = ctx->excitation;
     enum Mode mode = ctx->fr_cur_mode;
     
     if (mode == MODE_6k60) {
@@ -403,8 +409,9 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     } else
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
-                              
-     pitch_lag_int += pitch_lag_frac > 0;
+    
+    ctx->pitch_lag_int = pitch_lag_int;
+    pitch_lag_int     += pitch_lag_frac > 0;
      
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
@@ -435,7 +442,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
  * @param m                   [in] (log2) Number of potential positions
  * @param off                 [in] Offset for decoded positions
  */
-//XXX: Some of these functions are simple and recurrent (used inline)
+// XXX: Some of these functions are simple and recurrent (used inline)
 
 static inline void decode_1p_track(int *out, int code, int m, int off)
 {   ///code: m+1 bits
@@ -506,7 +513,7 @@ static void decode_5p_track(int *out, int code, int m, int off)
     
     decode_3p_track(out, BIT_STR(code, 2*m, 3*m - 2),
                     m - 1, off + half_3p);
-    //XXX: there seems to be a typo in I3p expoent (from reference)
+    // XXX: there seems to be a typo in I3p expoent (from reference)
     decode_2p_track(out + 3, BIT_STR(code, 0, 2*m + 1), m, off);
 }
 
@@ -550,7 +557,7 @@ static void decode_6p_track(int *out, int code, int m, int off)
  * Decode the algebraic codebook index to pulse positions and signs,
  * then construct the algebraic codebook vector.
  *
- * @param fixed_sparse        [out] pointer to the algebraic (innovative) codebook
+ * @param fixed_sparse        [out] pointer to the algebraic codebook
  * @param pulse_hi            [in] MSBs part of the pulse index array (higher modes only)
  * @param pulse_lo            [in] LSBs part of the pulse index array
  * @param mode                [in] mode of the current frame
@@ -644,11 +651,54 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
     *fixed_gain_factor = gains[1] * (1.0 / 2048.0);
 }
 
+/**
+ * Apply pitch sharpening filters to the fixed vector sparse
+ * representation to output the fixed codebook excitation vector
+ *
+ * @param ctx                 [in] the context
+ * @param fixed_sparse        [in] fixed codebook sparse
+ * @param fixed_vector        [out] fixed codebook excitation
+ */
+// XXX: Spec states this procedure should be applied when the pitch
+// lag is less than 64, but this checking seems absent in reference and AMR-NB
+static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
+                             float *fixed_vector)
+{
+    /* Periodicity enhancement part */
+    fixed_sparse->pitch_lag = ctx->pitch_lag_int;
+    fixed_sparse->pitch_fac = 0.85;
+    
+    ff_set_fixed_vector(fixed_vector, fixed_sparse, 1.0,
+                        AMRWB_SUBFRAME_SIZE);
+    
+    /* Tilt part */
+    ff_weighted_vector_sumf(fixed_vector + 1, fixed_vector + 1, fixed_vector,
+                            1.0, - ctx->tilt_coef, AMRWB_SUBFRAME_SIZE - 1);
+}
+
+/**
+ * Calculate the voicing factor (-1.0 = unvoiced to 1.0 = voiced)
+ *
+ * @param p_vector, f_vector  [in] pitch and fixed excitation vectors
+ * @param p_gain, f_gain      [in] pitch and fixed gains
+ */
+// XXX: Function extracted from voice_factor() in reference code
+static float voice_factor(float *p_vector, float p_gain,
+                          float *f_vector, float f_gain)
+{
+    double p_ener = (double) ff_dot_productf(p_vector, p_vector,
+                             AMRWB_SUBFRAME_SIZE) * p_gain * p_gain;
+    double f_ener = (double) ff_dot_productf(f_vector, f_vector,
+                             AMRWB_SUBFRAME_SIZE) * f_gain * f_gain;
+
+    return (p_ener - f_ener) / (p_ener + f_ener);
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
     AMRWBContext *ctx  = avctx->priv_data;
-    AMRWBFrame   *cf   = &ctx->frame;  
+    AMRWBFrame   *cf   = &ctx->frame;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
@@ -694,10 +744,16 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
                      &fixed_gain_factor, &ctx->pitch_gain[4]);
+        
+        pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
     }
     
-    //update state for next frame
-    memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0])); 
+    // update state for next frame
+    memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0]));
+    
+    // calculate tilt coefficient for next subframe
+    ctx->tilt_coef = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
+                     ctx->fixed_vector, ctx->fixed_gain[4]) * 0.25 + 0.25;
     
     return 0;
 }
