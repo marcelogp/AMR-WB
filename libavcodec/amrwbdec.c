@@ -710,7 +710,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     int buf_size       = avpkt->size;
     AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
-    int sub;
+    int sub, i;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
     
@@ -760,6 +760,19 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                                        AMRWB_SUBFRAME_SIZE)/AMRWB_SUBFRAME_SIZE,
                        ctx->prediction_error,
                        ENERGY_MEAN, energy_pred_fac);
+        
+        /* Construct current excitation */
+        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
+            ctx->excitation[i] *= ctx->pitch_gain[4];
+            // XXX: Did not used ff_set_fixed_vector like AMR-NB in order
+            // to retain pitch sharpening done to the fixed_vector
+            ctx->excitation[i] += ctx->fixed_gain[4] * ctx->fixed_vector[i];
+            // XXX: Should remove fractional part of excitation like NB?
+            // I did not found a reference of this in the ref decoder
+        }
+        
+        ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
+                              AMRWB_SUBFRAME_SIZE);
     }
     
     // update state for next frame
