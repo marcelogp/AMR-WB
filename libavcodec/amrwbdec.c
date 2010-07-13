@@ -25,6 +25,7 @@
 #include "celp_math.h"
 #include "acelp_filters.h"
 #include "acelp_vectors.h"
+#include "acelp_pitch_delay.h"
 
 #include "amrwbdata.h"
 
@@ -57,6 +58,7 @@ typedef struct {
     float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
     float      fixed_vector[AMRWB_SUBFRAME_SIZE]; ///< algebraic codebook (fixed) vector
     
+    float                    prediction_error[4]; ///< quantified prediction errors {20log10(^gamma_gc)} for previous four subframes
     float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes
     float                          fixed_gain[5]; ///< quantified fixed gains for the current and previous four subframes
     
@@ -74,6 +76,11 @@ static int amrwb_decode_init(AVCodecContext *avctx)
         ctx->isf_q_past[i]    = isf_init[i] / (float) (1 << 15);
         ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
     }
+    
+    ctx->tilt_coef = 0;
+    
+    for (i = 0; i < 4; i++)
+        ctx->prediction_error[i] = MIN_ENERGY;
     
     return 0;
 }
@@ -746,6 +753,13 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                      &fixed_gain_factor, &ctx->pitch_gain[4]);
         
         pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
+        
+        ctx->fixed_gain[4] =
+            ff_amr_set_fixed_gain(fixed_gain_factor,
+                       ff_dot_productf(ctx->fixed_vector, ctx->fixed_vector,
+                                       AMRWB_SUBFRAME_SIZE)/AMRWB_SUBFRAME_SIZE,
+                       ctx->prediction_error,
+                       ENERGY_MEAN, energy_pred_fac);
     }
     
     // update state for next frame

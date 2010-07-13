@@ -25,8 +25,10 @@
 #include <stdint.h>
 
 #define LP_ORDER              16               ///< linear predictive coding filter order
-#define MIN_ISF_SPACING       50.0             /* XXX: Taken from fixed-point 26.173, not sure */
+#define MIN_ISF_SPACING       50.0             // XXX: Taken from fixed-point 26.173, not sure
 #define PRED_FACTOR           (1.0/3.0)
+#define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB) 
+#define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
 
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe
 #define PITCH_MAX             231              ///< maximum received pitch delay value
@@ -1745,6 +1747,9 @@ static const int16_t qua_gain_7b[128][2] = {
     { 19764,  6792},    { 19912,  5135},
     { 20040,  2841},    { 21234, 19833}
 };
+
+/* 4-tap moving average prediction coefficients in reverse order */
+static const float energy_pred_fac[4] = { 0.2, 0.3, 0.4, 0.5 };
 
 /* Core frame sizes in each mode */
 static const uint16_t cf_sizes_wb[] = {
