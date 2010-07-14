@@ -63,6 +63,9 @@ typedef struct {
     float                          fixed_gain[5]; ///< quantified fixed gains for the current and previous four subframes
     
     float                              tilt_coef; ///< {beta_1} related to the voicing of the previous subframe
+
+    float                 prev_sparse_fixed_gain; ///< previous fixed gain; used by anti-sparseness to determine "onset"
+    uint8_t                    prev_ir_filter_nr; ///< previous impulse response filter "impNr": 0 - strong, 1 - medium, 2 - none
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -701,6 +704,98 @@ static float voice_factor(float *p_vector, float p_gain,
     return (p_ener - f_ener) / (p_ener + f_ener);
 }
 
+/**
+ * Reduce fixed vector sparseness by smoothing with one of three IR filters.
+ * Also known as "adaptive phase dispersion".
+ * Returns the filtered fixed vector address
+ *
+ * @param ctx                 [in] the context
+ * @param fixed_vector        [in] unfiltered fixed vector
+ * @param out                 [in] space for modified vector if necessary
+ */
+static const float *anti_sparseness(AMRWBContext *ctx,
+                                    const float *fixed_vector, float *out)
+{
+    int ir_filter_nr;
+
+    if (ctx->pitch_gain[4] < 0.6) {
+        ir_filter_nr = 0;      // strong filtering
+    } else if (ctx->pitch_gain[4] < 0.9) {
+        ir_filter_nr = 1;      // medium filtering
+    } else
+        ir_filter_nr = 2;      // no filtering
+
+    // detect 'onset'
+    if (ctx->fixed_gain[4] > 3.0 * ctx->fixed_gain[3]) {
+        if (ir_filter_nr < 2)
+            ir_filter_nr++;
+    } else
+    {
+        int i, count = 0;
+
+        for (i = 0; i < 5; i++)
+            if (ctx->pitch_gain[i] < 0.6)
+                count++;
+        if (count > 2)
+            ir_filter_nr = 0;
+
+        if (ir_filter_nr > ctx->prev_ir_filter_nr + 1)
+            ir_filter_nr--;
+    }
+
+    // update ir filter strength history
+    ctx->prev_ir_filter_nr = ir_filter_nr;
+
+    ir_filter_nr += (ctx->fr_cur_mode == MODE_8k85 ? 1 : 0);
+
+    if (ir_filter_nr < 2) {
+        int i, j;
+        const float *coef = ir_filters_lookup[ir_filter_nr];
+
+        /* Circular convolution code in reference
+         * decoder was modified to avoid using one
+         * extra array. The filtered vector is given by:
+         *
+         * c2(n) = sum(i,0,len-1){ c(i) * coef( (n - i + len) % len ) }
+         */
+
+        /* XXX: Based on ref decoder, I guess it is not neccessary
+         * a function like apply_ir_filter() here since we
+         * already have the fixed codebook in its array form and
+         * moreover, this form already has the pitch sharpening while
+         * the sparse codebook has not */
+
+        memset(out, 0, sizeof(float) * AMRWB_SUBFRAME_SIZE);
+        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            if (fixed_vector[i]) {
+                int li = AMRWB_SUBFRAME_SIZE - i;
+
+                for (j = 0; j < li; j++)
+                    out[i + j] += fixed_vector[i] * coef[j];
+
+                for (j = 0; j < i; j++)
+                    out[j] += fixed_vector[i] * coef[j + li];
+            }
+        fixed_vector = out;
+    }
+
+    return fixed_vector;
+}
+
+/**
+ * Update context state before the next subframe
+ *
+ * @param ctx                 [in] the context
+ */
+static void update_sub_state(AMRWBContext *ctx)
+{
+    ctx->tilt_coef = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
+                     ctx->fixed_vector, ctx->fixed_gain[4]) * 0.25 + 0.25;
+
+    memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
+    memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
+}
+
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AVPacket *avpkt)
 {
@@ -709,7 +804,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
     AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
+    float spare_vector[AMRWB_SUBFRAME_SIZE]; // extra stack space to hold result from anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
+    const float *synth_fixed_vector;         // pointer to the fixed vector that synthesis should use
     int sub, i;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
@@ -771,16 +868,16 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             // I did not found a reference of this in the ref decoder
         }
         
+        synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
+                                             spare_vector);
+
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
                               AMRWB_SUBFRAME_SIZE);
+        update_sub_state(ctx);
     }
     
     // update state for next frame
     memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0]));
-    
-    // calculate tilt coefficient for next subframe
-    ctx->tilt_coef = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
-                     ctx->fixed_vector, ctx->fixed_gain[4]) * 0.25 + 0.25;
     
     return 0;
 }
