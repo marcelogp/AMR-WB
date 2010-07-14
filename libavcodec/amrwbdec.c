@@ -66,6 +66,7 @@ typedef struct {
 
     float                 prev_sparse_fixed_gain; ///< previous fixed gain; used by anti-sparseness to determine "onset"
     uint8_t                    prev_ir_filter_nr; ///< previous impulse response filter "impNr": 0 - strong, 1 - medium, 2 - none
+    float                           prev_tr_gain; ///< previous initial gain used by noise enhancer for thresold
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -80,7 +81,7 @@ static int amrwb_decode_init(AVCodecContext *avctx)
         ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
     }
     
-    ctx->tilt_coef = 0;
+    ctx->tilt_coef = ctx->prev_tr_gain = 0.0;
     
     for (i = 0; i < 4; i++)
         ctx->prediction_error[i] = MIN_ENERGY;
@@ -784,14 +785,57 @@ static const float *anti_sparseness(AMRWBContext *ctx,
 
 /**
  * Update context state before the next subframe
+ * Calculate a stability factor {teta} based on distance between
+ * current and past isf. A value of 1 shows maximum signal stability.
+ */
+static float stability_factor(const float *isf, const float *isf_past)
+{
+    int i;
+    float acc = 0.0;
+
+    for (i = 0; i < LP_ORDER - 1; i++)
+        acc += (isf[i] - isf_past[i]) * (isf[i] - isf_past[i]);
+
+    return 1.25 - acc * 0.8 / 256;
+}
+
+/**
+ * Apply a non-linear fixed gain smoothing in order to reduce
+ * fluctuation in the energy of excitation. Returns smoothed gain.
  *
  * @param ctx                 [in] the context
+ * @param fixed_gain          [in] unsmoothed fixed gain
+ * @param prev_tr_gain        [in/out] previous threshold gain (updated)
+ * @param voice_fac           [in] frame voicing factor
+ * @param stab_fac            [in] frame stability factor
  */
 static void update_sub_state(AMRWBContext *ctx)
+static float noise_enhancer(float fixed_gain, float *prev_tr_gain,
+                            float voice_fac,  float stab_fac)
 {
     ctx->tilt_coef = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
                      ctx->fixed_vector, ctx->fixed_gain[4]) * 0.25 + 0.25;
+    float sm_fac = 0.5 * (1 - voice_fac) * stab_fac;
+    float g0;
 
+    /* XXX: here it is supposed to "in(de)crement the fixed gain by 1.5dB"
+     * in each case, but the reference source (lines 812 onwards of
+     * dec_main.c) multiplies gain by strange constants that need checking
+     */
+    if (fixed_gain < *prev_tr_gain) {
+        // increment fixed_gain by 1.5dB ?
+        g0 = FFMIN(*prev_tr_gain, fixed_gain + ( fixed_gain *
+                    (6226 / (float) (1 << 15))));
+    } else
+        // decrement fixed_gain by 1.5dB ?
+        g0 = FFMAX(*prev_tr_gain, fixed_gain *
+                    (27536 / (float) (1 << 15)));
+
+    // update next frame threshold
+    *prev_tr_gain = g0;
+
+    return sm_fac * g0 + (1 - sm_fac) * fixed_gain;
+}
     memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
     memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
 }
@@ -807,6 +851,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float spare_vector[AMRWB_SUBFRAME_SIZE]; // extra stack space to hold result from anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
     const float *synth_fixed_vector;         // pointer to the fixed vector that synthesis should use
+    float synth_fixed_gain;                  // the fixed gain that synthesis should use
+    float voice_fac, stab_fac;               // parameters used for gain smoothing
     int sub, i;
     
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
@@ -826,6 +872,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     else {
         decode_isf_indices_46b(cf->isp_id, ctx->isf_quant, ctx->fr_quality);
     }
+
+    stab_fac = stability_factor(ctx->isf_quant, ctx->isf_q_past);
     
     isf_add_mean_and_past(ctx->isf_quant, ctx->isf_q_past);
     isf_set_min_dist(ctx->isf_quant, MIN_ISF_SPACING, LP_ORDER);
@@ -867,6 +915,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             // XXX: Should remove fractional part of excitation like NB?
             // I did not found a reference of this in the ref decoder
         }
+
+        synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
+                                          voice_fac, stab_fac);
         
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
                                              spare_vector);
