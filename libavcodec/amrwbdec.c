@@ -276,7 +276,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
 static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
 {
     int i;
-    // XXX: Did not used ff_weighted_vector_sumf because using double
+    // XXX: Did not use ff_weighted_vector_sumf because using double
     
     for (i = 0; i < LP_ORDER; i++)
         isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
@@ -784,7 +784,6 @@ static const float *anti_sparseness(AMRWBContext *ctx,
 }
 
 /**
- * Update context state before the next subframe
  * Calculate a stability factor {teta} based on distance between
  * current and past isf. A value of 1 shows maximum signal stability.
  */
@@ -803,18 +802,14 @@ static float stability_factor(const float *isf, const float *isf_past)
  * Apply a non-linear fixed gain smoothing in order to reduce
  * fluctuation in the energy of excitation. Returns smoothed gain.
  *
- * @param ctx                 [in] the context
  * @param fixed_gain          [in] unsmoothed fixed gain
  * @param prev_tr_gain        [in/out] previous threshold gain (updated)
  * @param voice_fac           [in] frame voicing factor
  * @param stab_fac            [in] frame stability factor
  */
-static void update_sub_state(AMRWBContext *ctx)
 static float noise_enhancer(float fixed_gain, float *prev_tr_gain,
                             float voice_fac,  float stab_fac)
 {
-    ctx->tilt_coef = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
-                     ctx->fixed_vector, ctx->fixed_gain[4]) * 0.25 + 0.25;
     float sm_fac = 0.5 * (1 - voice_fac) * stab_fac;
     float g0;
 
@@ -836,6 +831,12 @@ static float noise_enhancer(float fixed_gain, float *prev_tr_gain,
 
     return sm_fac * g0 + (1 - sm_fac) * fixed_gain;
 }
+
+/**
+ * Update context state before the next subframe
+ */
+static void update_sub_state(AMRWBContext *ctx)
+{
     memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
     memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
 }
@@ -905,6 +906,11 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                                        AMRWB_SUBFRAME_SIZE)/AMRWB_SUBFRAME_SIZE,
                        ctx->prediction_error,
                        ENERGY_MEAN, energy_pred_fac);
+
+        /* Calculate voice factor and store tilt for next subframe */
+        voice_fac      = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
+                                      ctx->fixed_vector, ctx->fixed_gain[4]);
+        ctx->tilt_coef = voice_fac * 0.25 + 0.25;
         
         /* Construct current excitation */
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
