@@ -714,8 +714,8 @@ static float voice_factor(float *p_vector, float p_gain,
  * @param fixed_vector        [in] unfiltered fixed vector
  * @param out                 [in] space for modified vector if necessary
  */
-static const float *anti_sparseness(AMRWBContext *ctx,
-                                    const float *fixed_vector, float *out)
+static float *anti_sparseness(AMRWBContext *ctx,
+                              float *fixed_vector, float *out)
 {
     int ir_filter_nr;
 
@@ -833,6 +833,30 @@ static float noise_enhancer(float fixed_gain, float *prev_tr_gain,
 }
 
 /**
+ * Filter the fixed_vector to emphasize the higher frequencies
+ *
+ * @param fixed_vector        [in/out] fixed codebook vector
+ * @param voice_fac           [in] frame voicing factor
+ */
+static void pitch_enhancer(float *fixed_vector, float voice_fac)
+{
+    int i;
+    float cpe = 0.125 * (1 + voice_fac);
+    float last = fixed_vector[0]; // holds c(i - 1)
+
+    fixed_vector[0] -= cpe * fixed_vector[1];
+
+    for (i = 1; i < AMRWB_SUBFRAME_SIZE - 1; i++) {
+        float cur = fixed_vector[i];
+
+        fixed_vector[i] -= cpe * (last + fixed_vector[i + 1]);
+        last = cur;
+    }
+
+    fixed_vector[AMRWB_SUBFRAME_SIZE - 1] -= cpe * last;
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -851,7 +875,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     AMRFixed fixed_sparse = {0};             // fixed vector up to anti-sparseness processing
     float spare_vector[AMRWB_SUBFRAME_SIZE]; // extra stack space to hold result from anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
-    const float *synth_fixed_vector;         // pointer to the fixed vector that synthesis should use
+    float *synth_fixed_vector;               // pointer to the fixed vector that synthesis should use
     float synth_fixed_gain;                  // the fixed gain that synthesis should use
     float voice_fac, stab_fac;               // parameters used for gain smoothing
     int sub, i;
@@ -922,12 +946,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             // I did not found a reference of this in the ref decoder
         }
 
+        /* Post-processing of excitation elements */
         synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
         
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
                                              spare_vector);
 
+        pitch_enhancer(synth_fixed_vector, voice_fac);
+
+
+        /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
                               AMRWB_SUBFRAME_SIZE);
         update_sub_state(ctx);
