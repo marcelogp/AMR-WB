@@ -31,7 +31,10 @@
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
 
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe
+#define AMRWB_SAMPLE_BOUND    32768.0          ///< threshold for synthesis overflow
 #define PITCH_MAX             231              ///< maximum received pitch delay value
+
+
 
 /* Mode ordering is sensitive, do not change */
 enum Mode {
