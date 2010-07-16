@@ -23,6 +23,7 @@
 #include "get_bits.h"
 #include "lsp.h"
 #include "celp_math.h"
+#include "celp_filters.h"
 #include "acelp_filters.h"
 #include "acelp_vectors.h"
 #include "acelp_pitch_delay.h"
@@ -67,6 +68,8 @@ typedef struct {
     float                 prev_sparse_fixed_gain; ///< previous fixed gain; used by anti-sparseness to determine "onset"
     uint8_t                    prev_ir_filter_nr; ///< previous impulse response filter "impNr": 0 - strong, 1 - medium, 2 - none
     float                           prev_tr_gain; ///< previous initial gain used by noise enhancer for thresold
+
+    float samples_in[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< floating point samples
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -857,6 +860,61 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
 }
 
 /**
+ * Conduct 16th order linear predictive coding synthesis from excitation
+ * Return a overflow detection flag
+ *
+ * @param ctx                 [in] pointer to the AMRWBContext
+ * @param lpc                 [in] pointer to the LPC coefficients
+ * @param fixed_gain          [in] fixed codebook gain for synthesis
+ * @param fixed_vector        [in] algebraic codebook vector
+ * @param samples             [out] pointer to the output speech samples
+ * @param overflow            [in] 16-bit predicted overflow flag
+ */
+static uint8_t synthesis(AMRWBContext *ctx, float *lpc,
+                     float fixed_gain, const float *fixed_vector,
+                     float *samples, uint8_t overflow)
+{
+    int i;
+    float excitation[AMRWB_SUBFRAME_SIZE];
+
+    // if an overflow has been detected, the pitch vector is scaled down by a
+    // factor of 4
+    if (overflow)
+        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            ctx->pitch_vector[i] *= 0.25;
+
+    ff_weighted_vector_sumf(excitation, ctx->pitch_vector, fixed_vector,
+                            ctx->pitch_gain[4], fixed_gain, AMRWB_SUBFRAME_SIZE);
+
+    // emphasize pitch vector contribution in low bitrate modes
+    if (ctx->pitch_gain[4] > 0.5 && !overflow && ctx->fr_cur_mode <= MODE_8k85) {
+        float energy = ff_dot_productf(excitation, excitation,
+                                       AMRWB_SUBFRAME_SIZE);
+
+        // XXX: Weird part in both ref code and spec. A unknown parameter
+        // {beta} seems to be identical to the current pitch gain
+        float pitch_factor = 0.25 * ctx->pitch_gain[4] * ctx->pitch_gain[4];
+
+        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            excitation[i] += pitch_factor * ctx->pitch_vector[i];
+
+        ff_scale_vector_to_given_sum_of_squares(excitation, excitation,
+                                                energy, AMRWB_SUBFRAME_SIZE);
+    }
+
+    ff_celp_lp_synthesis_filterf(samples, lpc, excitation,
+                                 AMRWB_SUBFRAME_SIZE, LP_ORDER);
+
+    // detect overflow
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+        if (fabsf(samples[i]) > AMRWB_SAMPLE_BOUND) {
+            return 1;
+        }
+
+    return 0;
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -955,6 +1013,13 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
+        if (synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
+                      synth_fixed_vector, &ctx->samples_in[LP_ORDER], 0))
+            // overflow detected -> rerun synthesis scaling pitch vector down
+            // by a factor of 4, skipping pitch vector contribution emphasis
+            // and adaptive gain control
+            synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
+                      synth_fixed_vector, &ctx->samples_in[LP_ORDER], 1);
 
         /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
