@@ -47,22 +47,22 @@ typedef struct {
     float                   isf_q_past[LP_ORDER]; ///< quantized ISF vector of the previous frame
     double                      isp[4][LP_ORDER]; ///< ISP vectors from current frame
     double               isp_sub4_past[LP_ORDER]; ///< ISP vector for the 4th subframe of the previous frame
-    
+
     float                   lp_coef[4][LP_ORDER]; ///< Linear Prediction Coefficients from ISP vector
 
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for next relative subframe
     uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
-    
+
     float excitation_buf[PITCH_MAX + LP_ORDER + 1 + AMRWB_SUBFRAME_SIZE]; ///< current excitation and all necessary excitation history
     float                            *excitation; ///< points to current excitation in excitation_buf[]
-    
+
     float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
     float      fixed_vector[AMRWB_SUBFRAME_SIZE]; ///< algebraic codebook (fixed) vector
-    
+
     float                    prediction_error[4]; ///< quantified prediction errors {20log10(^gamma_gc)} for previous four subframes
     float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes
     float                          fixed_gain[5]; ///< quantified fixed gains for the current and previous four subframes
-    
+
     float                              tilt_coef; ///< {beta_1} related to the voicing of the previous subframe
 
     float                 prev_sparse_fixed_gain; ///< previous fixed gain; used by anti-sparseness to determine "onset"
@@ -75,29 +75,29 @@ typedef struct {
     float                             hpf_mem[4]; ///< previous values in the high-pass filter
 } AMRWBContext;
 
-static int amrwb_decode_init(AVCodecContext *avctx) 
+static int amrwb_decode_init(AVCodecContext *avctx)
 {
     AMRWBContext *ctx = avctx->priv_data;
     int i;
-    
+
     ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
 
     for (i = 0; i < LP_ORDER; i++) {
         ctx->isf_q_past[i]    = isf_init[i] / (float) (1 << 15);
         ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
     }
-    
+
     ctx->tilt_coef = ctx->prev_tr_gain = 0.0;
-    
+
     for (i = 0; i < 4; i++)
         ctx->prediction_error[i] = MIN_ENERGY;
-    
+
     return 0;
 }
 
 /**
  * Parses a speech frame, storing data in the Context
- * 
+ *
  * @param c                 [in/out] the context
  * @param buf               [in] pointer to the input buffer
  * @param buf_size          [in] size of the input buffer
@@ -110,30 +110,30 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     GetBitContext gb;
     enum Mode mode;
     uint16_t *data;
-    
+
     init_get_bits(&gb, buf, buf_size * 8);
-    
+
     /* AMR-WB header */
     ctx->fr_cur_mode  = get_bits(&gb, 4);
     mode              = ctx->fr_cur_mode;
     ctx->fr_quality   = get_bits1(&gb);
-    
+
     skip_bits(&gb, 3);
-    
+
     /* AMR-WB Auxiliary Information */
     ctx->fr_mode_ind = get_bits(&gb, 4);
     ctx->fr_mode_req = get_bits(&gb, 4);
     // XXX: Need to check conformity in mode_ind/mode_req and crc?
     ctx->fr_crc = get_bits(&gb, 8);
-    
+
     data = (uint16_t *) &ctx->frame;
     memset(data, 0, sizeof(AMRWBFrame));
     buf++;
-    
+
     if (mode < MODE_SID) { /* Normal speech frame */
         const uint16_t *perm = amr_bit_orderings_by_mode[mode];
         int field_size;
-        
+
         while ((field_size = *perm++)) {
             int field = 0;
             int field_offset = *perm++;
@@ -148,7 +148,7 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     else if (mode == MODE_SID) { /* Comfort noise frame */
         /* not implemented */
     }
-    
+
     return mode;
 }
 
@@ -167,8 +167,8 @@ static void isf2isp(const float *isf, double *isp)
 }
 
 /**
- * Decodes quantized ISF vectors using 36-bit indices (6K60 mode only) 
- * 
+ * Decodes quantized ISF vectors using 36-bit indices (6K60 mode only)
+ *
  * @param ind               [in] array of 5 indices
  * @param isf_q             [out] isf_q[LP_ORDER]
  * @param fr_q              [in] frame quality (good frame == 1)
@@ -176,7 +176,7 @@ static void isf2isp(const float *isf, double *isp)
  */
 static void decode_isf_indices_36b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
     int i;
-    
+
     if (fr_q == 1) {
         for (i = 0; i < 9; i++) {
             isf_q[i] = dico1_isf[ind[0]][i] / (float) (1<<15);
@@ -198,8 +198,8 @@ static void decode_isf_indices_36b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
 }
 
 /**
- * Decodes quantized ISF vectors using 46-bit indices (except 6K60 mode) 
- * 
+ * Decodes quantized ISF vectors using 46-bit indices (except 6K60 mode)
+ *
  * @param ind                 [in] array of 7 indices
  * @param isf_q               [out] isf_q[LP_ORDER]
  * @param fr_q                [in] frame quality (good frame == 1)
@@ -222,7 +222,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
             isf_q[i + 3] = isf_q[i + 3] + dico22_isf[ind[3]][i] / (float) (1<<15);
         }
         for (i = 0; i < 3; i++) {
-            isf_q[i + 6] = isf_q[i + 6] + dico23_isf[ind[4]][i] / (float) (1<<15);    
+            isf_q[i + 6] = isf_q[i + 6] + dico23_isf[ind[4]][i] / (float) (1<<15);
         }
         for (i = 0; i < 3; i++) {
             isf_q[i + 9] = isf_q[i + 9] + dico24_isf[ind[5]][i] / (float) (1<<15);
@@ -237,7 +237,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
 /**
  * Apply mean and past ISF values using the prediction factor
  * Updates past ISF vector
- * 
+ *
  * @param isf_q               [in] current quantized ISF
  * @param isf_past            [in/out] past quantized ISF
  *
@@ -245,7 +245,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
 static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
     int i;
     float tmp;
-    
+
     for (i = 0; i < LP_ORDER; i++) {
         tmp = isf_q[i];
         isf_q[i] = tmp + isf_mean[i] / (float) (1<<15);
@@ -256,7 +256,7 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
 
 /**
  * Ensures a minimum distance between adjacent ISFs
- * 
+ *
  * @param isf                 [in/out] ISF vector
  * @param min_spacing         [in] minimum gap to keep
  * @param size                [in] ISF vector size
@@ -265,7 +265,7 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
 static void isf_set_min_dist(float *isf, float min_spacing, int size) {
     int i;
     float prev = 0.0;
-    
+
     for (i = 0; i < size; i++) {
         isf[i] = FFMAX(isf[i], prev + min_spacing);
         prev = isf[i];
@@ -283,13 +283,13 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
 {
     int i;
     // XXX: Did not use ff_weighted_vector_sumf because using double
-    
+
     for (i = 0; i < LP_ORDER; i++)
         isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
-        
+
     for (i = 0; i < LP_ORDER; i++)
         isp_q[1][i] = 0.20 * isp4_past[i] + 0.80 * isp_q[3][i];
-        
+
     for (i = 0; i < LP_ORDER; i++)
         isp_q[2][i] = 0.04 * isp4_past[i] + 0.96 * isp_q[3][i];
 }
@@ -308,20 +308,20 @@ static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
     double last_isp = isp[2 * lp_half_order - 1];
     double qa_old = 0; // XXX: qa[i-2] assuming qa[-1] = 0, not mentioned in spec
     int i;
-    
+
     ff_lsp2polyf(isp,     pa, lp_half_order);
     ff_lsp2polyf(isp + 1, qa, lp_half_order);
-    
+
     for (i=1; i<lp_half_order; i++) {
         double paf = (1 + last_isp) * pa[i];
         double qaf = (1 - last_isp) * (qa[i] - qa_old);
-        
+
         qa_old = qa[i-1];
-        
+
         lp[i]  = 0.5 * (paf + qaf);
         lp2[i] = 0.5 * (paf - qaf);
     }
-    
+
     lp2[0] = 0.5 * (1 + last_isp) * pa[lp_half_order] * lp_half_order;
     lp2[lp_half_order] = last_isp;
 }
@@ -416,7 +416,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     int i;
     float *exc     = ctx->excitation;
     enum Mode mode = ctx->fr_cur_mode;
-    
+
     if (mode == MODE_6k60) {
         decode_pitch_lag_6K60(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
@@ -426,10 +426,10 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     } else
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
-    
+
     ctx->pitch_lag_int = pitch_lag_int;
     pitch_lag_int     += pitch_lag_frac > 0;
-     
+
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
     ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int,
@@ -464,7 +464,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
 static inline void decode_1p_track(int *out, int code, int m, int off)
 {   ///code: m+1 bits
     int pos = BIT_STR(code, 0, m) + off;
-    
+
     out[0] = BIT_POS(code, m) ? -pos : pos;
 }
 
@@ -472,7 +472,7 @@ static inline void decode_2p_track(int *out, int code, int m, int off)
 {   ///code: 2m+1 bits
     int pos0 = BIT_STR(code, m, m) + off;
     int pos1 = BIT_STR(code, 0, m) + off;
-    
+
     out[0] = BIT_POS(code, 2*m) ? -pos0 : pos0;
     out[1] = BIT_POS(code, 2*m) ? -pos1 : pos1;
     out[1] = pos0 > pos1 ? -out[1] : out[1];
@@ -481,7 +481,7 @@ static inline void decode_2p_track(int *out, int code, int m, int off)
 static void decode_3p_track(int *out, int code, int m, int off)
 {   ///code: 3m+1 bits
     int half_2p = BIT_POS(code, 2*m - 1) << (m - 1);
-    
+
     decode_2p_track(out, BIT_STR(code, 0, 2*m - 1),
                     m - 1, off + half_2p);
     decode_1p_track(out + 2, BIT_STR(code, 2*m, m + 1), m, off);
@@ -491,13 +491,13 @@ static void decode_4p_track(int *out, int code, int m, int off)
 {   ///code: 4m bits
     int half_4p, subhalf_2p;
     int b_offset = 1 << (m - 1);
-    
+
     switch (BIT_STR(code, 4*m - 2, 2)) /* case ID (2 bits) */
     {
         case 0: /* 0 pulses in A, 4 pulses in B or vice-versa */
             half_4p = BIT_POS(code, 4*m - 3) << (m - 1); /* which has 4 pulses */
             subhalf_2p = BIT_POS(code, 2*m - 3) << (m - 2);
-            
+
             decode_2p_track(out, BIT_STR(code, 0, 2*m - 3),
                             m - 2, off + half_4p + subhalf_2p);
             decode_2p_track(out + 2, BIT_STR(code, 2*m - 2, 2*m - 1),
@@ -527,7 +527,7 @@ static void decode_4p_track(int *out, int code, int m, int off)
 static void decode_5p_track(int *out, int code, int m, int off)
 {   ///code: 5m bits
     int half_3p = BIT_POS(code, 5*m - 1) << (m - 1);
-    
+
     decode_3p_track(out, BIT_STR(code, 2*m, 3*m - 2),
                     m - 1, off + half_3p);
     // XXX: there seems to be a typo in I3p expoent (from reference)
@@ -540,7 +540,7 @@ static void decode_6p_track(int *out, int code, int m, int off)
     /* which half has more pulses in cases 0 to 2 */
     int half_more  = BIT_POS(code, 6*m - 5) << (m - 1);
     int half_other = b_offset - half_more;
-    
+
     switch (BIT_STR(code, 6*m - 4, 2)) /* case ID (2 bits) */
     {
         case 0: /* 0 pulses in A, 6 pulses in B or vice-versa */
@@ -590,7 +590,7 @@ static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi
     int pulses_nb = 0;
     int spacing = (mode == MODE_6k60) ? 2 : 4;
     int i, j;
-    
+
     switch (mode) {
         case MODE_6k60:
             for (i = 0; i < 2; i++)
@@ -642,7 +642,7 @@ static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi
             fixed_sparse->y[pulses_nb] = pos < 0 ? -1.0 : 1.0;
             pulses_nb++;
         }
-    
+
     fixed_sparse->n = pulses_nb;
 }
 
@@ -658,12 +658,12 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
                          float *fixed_gain_factor, float *pitch_gain)
 {
     const int16_t *gains;
-    
+
     if (mode == MODE_6k60 || mode == MODE_8k85)
         gains = qua_gain_6b[vq_gain];
     else
         gains = qua_gain_7b[vq_gain];
-    
+
     *pitch_gain        = gains[0] * (1.0 / 16384.0);
     *fixed_gain_factor = gains[1] * (1.0 / 2048.0);
 }
@@ -684,10 +684,10 @@ static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
     /* Periodicity enhancement part */
     fixed_sparse->pitch_lag = ctx->pitch_lag_int;
     fixed_sparse->pitch_fac = 0.85;
-    
+
     ff_set_fixed_vector(fixed_vector, fixed_sparse, 1.0,
                         AMRWB_SUBFRAME_SIZE);
-    
+
     /* Tilt part */
     ff_weighted_vector_sumf(fixed_vector + 1, fixed_vector + 1, fixed_vector,
                             1.0, - ctx->tilt_coef, AMRWB_SUBFRAME_SIZE - 1);
@@ -990,9 +990,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float synth_fixed_gain;                  // the fixed gain that synthesis should use
     float voice_fac, stab_fac;               // parameters used for gain smoothing
     int sub, i;
-    
+
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
-    
+
     if (ctx->fr_cur_mode == MODE_SID) {
         av_log_missing_feature(avctx, "SID mode", 1);
         return -1;
@@ -1000,7 +1000,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     if (!ctx->fr_quality) {
         av_log(avctx, AV_LOG_ERROR, "Encountered a bad or corrupted frame\n");
     }
-    
+
     /* Decode the quantized ISF vector */
     if (ctx->fr_cur_mode == MODE_6k60) {
         decode_isf_indices_36b(cf->isp_id, ctx->isf_quant, ctx->fr_quality);
@@ -1010,17 +1010,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     }
 
     stab_fac = stability_factor(ctx->isf_quant, ctx->isf_q_past);
-    
+
     isf_add_mean_and_past(ctx->isf_quant, ctx->isf_q_past);
     isf_set_min_dist(ctx->isf_quant, MIN_ISF_SPACING, LP_ORDER);
-    
+
     isf2isp(ctx->isf_quant, ctx->isp[3]);
     /* Generate a ISP vector for each subframe */
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
-    
+
     for (sub = 0; sub < 4; sub++)
         isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
-        
+
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
 
@@ -1032,9 +1032,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
                      &fixed_gain_factor, &ctx->pitch_gain[4]);
-        
+
         pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
-        
+
         ctx->fixed_gain[4] =
             ff_amr_set_fixed_gain(fixed_gain_factor,
                        ff_dot_productf(ctx->fixed_vector, ctx->fixed_vector,
@@ -1046,7 +1046,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         voice_fac      = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
                                       ctx->fixed_vector, ctx->fixed_gain[4]);
         ctx->tilt_coef = voice_fac * 0.25 + 0.25;
-        
+
         /* Construct current excitation */
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
             ctx->excitation[i] *= ctx->pitch_gain[4];
@@ -1060,7 +1060,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         /* Post-processing of excitation elements */
         synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
-        
+
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
                                              spare_vector);
 
@@ -1085,10 +1085,10 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                               AMRWB_SUBFRAME_SIZE);
         update_sub_state(ctx);
     }
-    
+
     // update state for next frame
     memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0]));
-    
+
     return 0;
 }
 
