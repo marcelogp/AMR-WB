@@ -18,7 +18,7 @@
  * License along with FFmpeg; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
- 
+
 #ifndef AVCODEC_AMRWBDATA_H
 #define AVCODEC_AMRWBDATA_H
 
@@ -27,7 +27,7 @@
 #define LP_ORDER              16               ///< linear predictive coding filter order
 #define MIN_ISF_SPACING       50.0             // XXX: Taken from fixed-point 26.173, not sure
 #define PRED_FACTOR           (1.0/3.0)
-#define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB) 
+#define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
 
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe
@@ -564,7 +564,7 @@ static const uint16_t order_MODE_23k05[] = {
      7,   AMR_OF(3, vq_gain),   6,  23,  45,  31,  35,  41,  27,
      0
 };
-    
+
 static const uint16_t order_MODE_23k85[] = {
      1,         AMR_BIT(vad),   0,
      8,   AMR_BIT(isp_id[0]),  48,  47,   9,   1,   8,   2,   7,  67,
@@ -1810,5 +1810,5 @@ static const uint16_t cf_classA_size[] = {
 static const uint16_t cf_classB_size[] = {
     78, 113, 181, 213, 245, 293, 325, 389, 405
 };
-    
+
 #endif
