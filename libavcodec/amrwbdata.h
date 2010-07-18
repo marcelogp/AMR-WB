@@ -1789,6 +1789,13 @@ static const float *ir_filters_lookup[2] = {
     ir_filter_str, ir_filter_mid
 };
 
+/* High-pass filter coefficients for inputs and outputs (feedback) */
+static const float hpf_x_coef[3] = {
+    0.989501953, -1.979003906, 0.989501953
+};
+
+static const float hpf_y_coef[2] = { 1.978881836, -0.979125977 };
+
 /* Core frame sizes in each mode */
 static const uint16_t cf_sizes_wb[] = {
     132, 177, 253, 285, 317, 365, 397, 461, 477,
