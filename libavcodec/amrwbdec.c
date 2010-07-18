@@ -70,6 +70,8 @@ typedef struct {
     float                           prev_tr_gain; ///< previous initial gain used by noise enhancer for thresold
 
     float samples_in[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< floating point samples
+
+    float                           demph_mem[1]; ///< previous value in the de-emphasis filter
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -915,6 +917,26 @@ static uint8_t synthesis(AMRWBContext *ctx, float *lpc,
 }
 
 /**
+ * Apply to synthesis a de-emphasis filter of the form:
+ * H(z) = 1 / (1 - m * z^-1)
+ *
+ * @param synth               [in/out] synthesized speech array
+ * @param m                   [in] filter coefficient
+ * @param mem                 [in] state from last filtering
+ */
+static void de_emphasis(float *synth, float m, float mem[1])
+{
+    int i;
+
+    synth[0] += m * mem[0];
+
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+        synth[i] += synth[i - 1] * m;
+
+    mem[0] = synth[AMRWB_SUBFRAME_SIZE - 1];
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -1020,6 +1042,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             // and adaptive gain control
             synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
                       synth_fixed_vector, &ctx->samples_in[LP_ORDER], 1);
+
+        de_emphasis(&ctx->samples_in[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
 
         /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,

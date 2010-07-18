@@ -34,7 +34,7 @@
 #define AMRWB_SAMPLE_BOUND    32768.0          ///< threshold for synthesis overflow
 #define PITCH_MAX             231              ///< maximum received pitch delay value
 
-
+#define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
 
 /* Mode ordering is sensitive, do not change */
 enum Mode {
