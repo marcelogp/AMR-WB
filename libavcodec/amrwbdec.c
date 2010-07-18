@@ -72,6 +72,7 @@ typedef struct {
     float samples_in[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< floating point samples
 
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
+    float                             hpf_mem[4]; ///< previous values in the high-pass filter
 } AMRWBContext;
 
 static int amrwb_decode_init(AVCodecContext *avctx) 
@@ -937,6 +938,36 @@ static void de_emphasis(float *synth, float m, float mem[1])
 }
 
 /**
+ * Apply to synthesis a 2nd order high-pass filter
+ * with cutoff frequency at 31 Hz
+ *
+ * @param out                 [out] buffer for filtered output
+ * @param mem                 [in] state from last filtering
+ * @param in                  [in] input speech data
+ *
+ * @remark It is safe to pass the same array in in and out parameters.
+ */
+static void high_pass_filter(float *out, float mem[4], const float *in)
+{
+    int i;
+    float *x = mem - 1, *y = mem + 2; // previous inputs and outputs
+
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
+        float x0 = in[i];
+
+        out[i] = hpf_x_coef[0] * x0   + hpf_y_coef[0] * y[0] +
+                 hpf_x_coef[1] * x[1] + hpf_y_coef[1] * y[1] +
+                 hpf_x_coef[2] * x[2];
+
+        y[1] = y[0];
+        y[0] = out[i];
+
+        x[2] = x[1];
+        x[1] = x0;
+    }
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -1043,7 +1074,11 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
                       synth_fixed_vector, &ctx->samples_in[LP_ORDER], 1);
 
+        /* Synthesis speech post-processing */
         de_emphasis(&ctx->samples_in[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
+
+        high_pass_filter(&ctx->samples_in[LP_ORDER], ctx->hpf_mem,
+                         &ctx->samples_in[LP_ORDER]);
 
         /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
