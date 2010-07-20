@@ -124,7 +124,7 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
 
     // XXX: We are using only the "MIME/storage" format
     // used by libopencore. This format is simpler and
-    // do not have the auxiliary information of the frame
+    // does not have the auxiliary information of the frame
 
     /* AMR-WB Auxiliary Information */
     /*
