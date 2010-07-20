@@ -113,18 +113,23 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
 
     init_get_bits(&gb, buf, buf_size * 8);
 
-    /* AMR-WB header */
+    /* AMR-WB header (1st octet) */
+    skip_bits(&gb, 1);      // padding bit
     ctx->fr_cur_mode  = get_bits(&gb, 4);
     mode              = ctx->fr_cur_mode;
     ctx->fr_quality   = get_bits1(&gb);
+    skip_bits(&gb, 2);
 
-    skip_bits(&gb, 3);
+    // XXX: We are using only the "MIME/storage" format
+    // used by libopencore. This format is simpler and
+    // do not have the auxiliary information of the frame
 
     /* AMR-WB Auxiliary Information */
-    ctx->fr_mode_ind = get_bits(&gb, 4);
-    ctx->fr_mode_req = get_bits(&gb, 4);
-    // XXX: Need to check conformity in mode_ind/mode_req and crc?
-    ctx->fr_crc = get_bits(&gb, 8);
+    /*
+     * ctx->fr_mode_ind = get_bits(&gb, 4);
+     * ctx->fr_mode_req = get_bits(&gb, 4);
+     * ctx->fr_crc = get_bits(&gb, 8);
+     */
 
     data = (uint16_t *) &ctx->frame;
     memset(data, 0, sizeof(AMRWBFrame));
@@ -138,9 +143,10 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
             int field = 0;
             int field_offset = *perm++;
             while (field_size--) {
-               uint16_t bit = *perm++;
+               uint16_t bit_idx = *perm++;
                field <<= 1;
-               field |= buf[bit >> 3] >> (bit & 7) & 1;
+               /* The bit index inside the byte is reversed */
+               field |= BIT_POS(buf[bit_idx >> 3], 7 - (bit_idx & 7));
             }
             data[field_offset] = field;
         }
