@@ -75,10 +75,12 @@ typedef struct {
     float                             hpf_mem[4]; ///< previous values in the high-pass filter
 } AMRWBContext;
 
-static int amrwb_decode_init(AVCodecContext *avctx)
+static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 {
     AMRWBContext *ctx = avctx->priv_data;
     int i;
+
+    avctx->sample_fmt = SAMPLE_FMT_FLT;
 
     ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
 
@@ -1095,7 +1097,10 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     // update state for next frame
     memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0]));
 
-    return 0;
+    /* report how many samples we got */
+    *data_size = 4 * AMRWB_SFR_SIZE_OUT * sizeof(float);
+
+    return ((cf_sizes_wb[ctx->fr_cur_mode] + 7) >> 3) + 1;
 }
 
 AVCodec amrwb_decoder =
