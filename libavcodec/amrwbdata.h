@@ -69,7 +69,7 @@ typedef struct {
 } AMRWBFrame;
 
 /** The index of a frame parameter */
-#define AMR_BIT(field)                  (offsetof(AMRWBFrame, field))
+#define AMR_BIT(field)                  (offsetof(AMRWBFrame, field) >> 1)
 /** The index of a subframe-specific parameter */
 #define AMR_OF(frame_num, variable)     AMR_BIT(subframe[frame_num].variable)
 
