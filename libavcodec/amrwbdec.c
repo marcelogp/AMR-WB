@@ -74,7 +74,7 @@ typedef struct {
     float samples_in[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< floating point samples
 
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
-    float                             hpf_mem[4]; ///< previous values in the high-pass filter
+    float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
 
     AVLFG                                   prng; ///< random number generator for white noise excitation
 } AMRWBContext;
@@ -1150,14 +1150,14 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         de_emphasis(&ctx->samples_in[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
 
         high_pass_filter(&ctx->samples_in[LP_ORDER], hpf_31_coef,
-                         ctx->hpf_mem, &ctx->samples_in[LP_ORDER]);
+                         ctx->hpf_31_mem, &ctx->samples_in[LP_ORDER]);
 
         // XXX: the 5/4 upsampling for the lower band goes in here
 
 
         /* High frequency band generation */
         high_pass_filter(&ctx->samples_in[LP_ORDER], hpf_400_coef,
-                         ctx->hpf_mem, &ctx->samples_in[LP_ORDER]);
+                         ctx->hpf_400_mem, &ctx->samples_in[LP_ORDER]);
 
         hb_gain = find_hb_gain(ctx, &ctx->samples_in[LP_ORDER],
                                cur_subframe->hb_gain, cf->vad);
