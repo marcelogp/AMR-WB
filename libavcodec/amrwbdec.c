@@ -19,6 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/lfg.h"
+
 #include "avcodec.h"
 #include "get_bits.h"
 #include "lsp.h"
@@ -73,6 +75,8 @@ typedef struct {
 
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
     float                             hpf_mem[4]; ///< previous values in the high-pass filter
+
+    AVLFG                                   prng; ///< random number generator for white noise excitation
 } AMRWBContext;
 
 static av_cold int amrwb_decode_init(AVCodecContext *avctx)
@@ -81,6 +85,8 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
     int i;
 
     avctx->sample_fmt = SAMPLE_FMT_FLT;
+
+    av_lfg_init(&ctx->prng, 1);
 
     ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
 
@@ -876,17 +882,17 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
  *
  * @param ctx                 [in] pointer to the AMRWBContext
  * @param lpc                 [in] pointer to the LPC coefficients
+ * @param excitation          [out] buffer for synthesis final excitation
  * @param fixed_gain          [in] fixed codebook gain for synthesis
  * @param fixed_vector        [in] algebraic codebook vector
  * @param samples             [out] pointer to the output speech samples
  * @param overflow            [in] 16-bit predicted overflow flag
  */
-static uint8_t synthesis(AMRWBContext *ctx, float *lpc,
+static uint8_t synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                      float fixed_gain, const float *fixed_vector,
                      float *samples, uint8_t overflow)
 {
     int i;
-    float excitation[AMRWB_SUBFRAME_SIZE];
 
     // if an overflow has been detected, the pitch vector is scaled down by a
     // factor of 4
@@ -998,8 +1004,36 @@ static float find_hb_gain(AMRWBContext *ctx, const float *synth,
     tilt = ff_dot_productf(synth, synth + 1, AMRWB_SUBFRAME_SIZE - 1) /
            ff_dot_productf(synth, synth, AMRWB_SUBFRAME_SIZE);
 
+    tilt = FFMAX(0.0, tilt);
+
     /* return gain bounded by [0.1, 1.0] */
     return FFMAX(0.1, FFMIN(1.0, (1.0 - tilt) * (1.25 - 0.25 * wsp)));
+}
+
+/**
+ * Generate the high band excitation with the same energy from the lower
+ * one and scaled by the given gain
+ *
+ * @param ctx                 [in] the context
+ * @param hb_exc              [out] buffer for the excitation
+ * @param synth_exc           [in] excitation used for synthesis
+ * @param hb_gain             [in] wanted excitation gain
+ */
+static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
+                                 const float *synth_exc, float hb_gain)
+{
+    int i;
+    float energy = ff_dot_productf(synth_exc, synth_exc, AMRWB_SUBFRAME_SIZE);
+
+    /* Generate a white-noise excitation */
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+        hb_exc[i] = 32768.0 - (uint16_t) av_lfg_get(&ctx->prng) / 65536.0;
+
+    ff_scale_vector_to_given_sum_of_squares(hb_exc, hb_exc, energy,
+                                            AMRWB_SUBFRAME_SIZE);
+
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+        hb_exc[i] *= hb_gain;
 }
 
 /**
@@ -1024,6 +1058,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float *synth_fixed_vector;               // pointer to the fixed vector that synthesis should use
     float synth_fixed_gain;                  // the fixed gain that synthesis should use
     float voice_fac, stab_fac;               // parameters used for gain smoothing
+    float synth_exc[AMRWB_SUBFRAME_SIZE];    // post-processed excitation for synthesis
+    float hb_exc[AMRWB_SUBFRAME_SIZE];       // excitation for the high frequency band
     float hb_gain;
     int sub, i;
 
@@ -1102,12 +1138,12 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
-        if (synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
+        if (synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
                       synth_fixed_vector, &ctx->samples_in[LP_ORDER], 0))
             // overflow detected -> rerun synthesis scaling pitch vector down
             // by a factor of 4, skipping pitch vector contribution emphasis
             // and adaptive gain control
-            synthesis(ctx, ctx->lp_coef[sub], synth_fixed_gain,
+            synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
                       synth_fixed_vector, &ctx->samples_in[LP_ORDER], 1);
 
         /* Synthesis speech post-processing */
@@ -1125,6 +1161,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         hb_gain = find_hb_gain(ctx, &ctx->samples_in[LP_ORDER],
                                cur_subframe->hb_gain, cf->vad);
+
+        scaled_hb_excitation(ctx, hb_exc, synth_exc, hb_gain);
 
         /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
