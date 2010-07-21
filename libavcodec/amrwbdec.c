@@ -950,12 +950,14 @@ static void de_emphasis(float *synth, float m, float mem[1])
  * with cutoff frequency at 31 Hz
  *
  * @param out                 [out] buffer for filtered output
+ * @param hpf_coef            [in] filter coefficients as used below
  * @param mem                 [in] state from last filtering
  * @param in                  [in] input speech data
  *
  * @remark It is safe to pass the same array in in and out parameters.
  */
-static void high_pass_filter(float *out, float mem[4], const float *in)
+static void high_pass_filter(float *out, const float hpf_coef[2][3],
+                             float mem[4], const float *in)
 {
     int i;
     float *x = mem - 1, *y = mem + 2; // previous inputs and outputs
@@ -963,9 +965,9 @@ static void high_pass_filter(float *out, float mem[4], const float *in)
     for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
         float x0 = in[i];
 
-        out[i] = hpf_x_coef[0] * x0   + hpf_y_coef[0] * y[0] +
-                 hpf_x_coef[1] * x[1] + hpf_y_coef[1] * y[1] +
-                 hpf_x_coef[2] * x[2];
+        out[i] = hpf_coef[0][0] * x0   + hpf_coef[1][0] * y[0] +
+                 hpf_coef[0][1] * x[1] + hpf_coef[1][1] * y[1] +
+                 hpf_coef[0][2] * x[2];
 
         y[1] = y[0];
         y[0] = out[i];
@@ -973,6 +975,31 @@ static void high_pass_filter(float *out, float mem[4], const float *in)
         x[2] = x[1];
         x[1] = x0;
     }
+}
+
+/**
+ * Calculate the high band gain based on encoded index (23k85 mode) or
+ * on the lower band speech signal and the Voice Activity Detection flag
+ *
+ * @param ctx                 [in] the context
+ * @param synth               [in] LB speech synthesis at 12.8k
+ * @param hb_idx              [in] gain index for mode 23k85 only
+ * @param vad                 [in] VAD flag for the frame
+ */
+static float find_hb_gain(AMRWBContext *ctx, const float *synth,
+                          uint16_t hb_idx, uint8_t vad)
+{
+    int wsp = (vad > 0 ? 1 : 0);
+    float tilt;
+
+    if (ctx->fr_cur_mode == MODE_23k85)
+        return qua_hb_gain[hb_idx] / (float) (1 << 14);
+
+    tilt = ff_dot_productf(synth, synth + 1, AMRWB_SUBFRAME_SIZE - 1) /
+           ff_dot_productf(synth, synth, AMRWB_SUBFRAME_SIZE);
+
+    /* return gain bounded by [0.1, 1.0] */
+    return FFMAX(0.1, FFMIN(1.0, (1.0 - tilt) * (1.25 - 0.25 * wsp)));
 }
 
 /**
@@ -997,6 +1024,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float *synth_fixed_vector;               // pointer to the fixed vector that synthesis should use
     float synth_fixed_gain;                  // the fixed gain that synthesis should use
     float voice_fac, stab_fac;               // parameters used for gain smoothing
+    float hb_gain;
     int sub, i;
 
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
@@ -1085,8 +1113,18 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         /* Synthesis speech post-processing */
         de_emphasis(&ctx->samples_in[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
 
-        high_pass_filter(&ctx->samples_in[LP_ORDER], ctx->hpf_mem,
-                         &ctx->samples_in[LP_ORDER]);
+        high_pass_filter(&ctx->samples_in[LP_ORDER], hpf_31_coef,
+                         ctx->hpf_mem, &ctx->samples_in[LP_ORDER]);
+
+        // XXX: the 5/4 upsampling for the lower band goes in here
+
+
+        /* High frequency band generation */
+        high_pass_filter(&ctx->samples_in[LP_ORDER], hpf_400_coef,
+                         ctx->hpf_mem, &ctx->samples_in[LP_ORDER]);
+
+        hb_gain = find_hb_gain(ctx, &ctx->samples_in[LP_ORDER],
+                               cur_subframe->hb_gain, cf->vad);
 
         /* Update buffers and history */
         ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
