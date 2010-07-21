@@ -60,7 +60,7 @@ typedef struct {
     uint16_t adap;                         ///< adaptive codebook index
     uint16_t ltp;                          ///< ltp-filtering flag
     uint16_t vq_gain;                      ///< VQ adaptive and innovative gains
-    uint16_t energy;                       ///< high-band energy
+    uint16_t hb_gain;                      ///< high-band energy index (mode 23k85 only)
     uint16_t pul_ih[4];                    ///< MSBs part of codebook index (high modes only)
     uint16_t pul_il[4];                    ///< LSBs part of codebook index
 } AMRWBSubFrame;
@@ -597,7 +597,7 @@ static const uint16_t order_MODE_23k85[] = {
     11, AMR_OF(0, pul_il[3]), 234, 192, 358, 448, 260, 239, 268, 373,
                               401, 428, 473,
      7,   AMR_OF(0, vq_gain),   3,  20,  42,  28,  32,  38,  24,
-     4,    AMR_OF(0, energy),  72,  73,  74,  75,
+     4,   AMR_OF(0, hb_gain),  72,  73,  74,  75,
      6,      AMR_OF(1, adap),  36,  49,  88,  93,  99, 114,
      1,       AMR_OF(1, ltp), 122,
     11, AMR_OF(1, pul_ih[0]), 132, 155, 153, 182, 241, 308, 360, 252,
@@ -617,7 +617,7 @@ static const uint16_t order_MODE_23k85[] = {
     11, AMR_OF(1, pul_il[3]), 246, 215, 368, 451, 269, 277, 309, 402,
                               423, 435, 471,
      7,   AMR_OF(1, vq_gain),   4,  21,  43,  29,  33,  39,  25,
-     4,    AMR_OF(1, energy),  76,  77,  78,  79,
+     4,   AMR_OF(1, hb_gain),  76,  77,  78,  79,
      9,      AMR_OF(2, adap),  15,  16,  17,  18,  19,  51,  70,  96,
                               108,
      1,       AMR_OF(2, ltp), 123,
@@ -638,7 +638,7 @@ static const uint16_t order_MODE_23k85[] = {
     11, AMR_OF(2, pul_il[3]), 303, 205, 399, 450, 283, 275, 264, 379,
                               425, 438, 462,
      7,   AMR_OF(2, vq_gain),   5,  22,  44,  30,  34,  40,  26,
-     4,    AMR_OF(2, energy),  80,  81,  82,  83,
+     4,   AMR_OF(2, hb_gain),  80,  81,  82,  83,
      6,      AMR_OF(3, adap),  37,  50,  89,  94, 100, 115,
      1,       AMR_OF(3, ltp), 124,
     11, AMR_OF(3, pul_ih[0]), 135, 168, 152, 179, 226, 302, 347, 299,
@@ -658,7 +658,7 @@ static const uint16_t order_MODE_23k85[] = {
     11, AMR_OF(3, pul_il[3]), 255, 183, 389, 449, 244, 281, 305, 394,
                               405, 434, 460,
      7,   AMR_OF(3, vq_gain),   6,  23,  45,  31,  35,  41,  27,
-     4,    AMR_OF(3, energy),  84,  85,  86,  87,
+     4,   AMR_OF(3, hb_gain),  84,  85,  86,  87,
      0
 };
 
@@ -1792,12 +1792,23 @@ static const float *ir_filters_lookup[2] = {
     ir_filter_str, ir_filter_mid
 };
 
-/* High-pass filter coefficients for inputs and outputs (feedback) */
-static const float hpf_x_coef[3] = {
-    0.989501953, -1.979003906, 0.989501953
+/* High-pass filters coefficients for inputs and outputs (feedback) */
+
+static const float hpf_31_coef[2][3] = {        //  31 kHz cutoff filter
+    { 0.989501953, -1.979003906, 0.989501953 },
+    { 1.978881836, -0.979125977, 0           }
 };
 
-static const float hpf_y_coef[2] = { 1.978881836, -0.979125977 };
+static const float hpf_400_coef[2][3] = {       // 400 kHz cutoff filter
+    { 0.893554687, -1.787109375, 0.893554687 },
+    { 1.787109375, -0.864257812, 0           }
+};
+
+/* High band quantized gains for 23k85 in Q14 */
+static const uint16_t qua_hb_gain[16] = {
+   3624, 4673, 5597, 6479, 7425, 8378, 9324, 10264,
+   11210, 12206, 13391, 14844, 16770, 19655, 24289, 32728
+};
 
 /* Core frame sizes in each mode */
 static const uint16_t cf_sizes_wb[] = {
