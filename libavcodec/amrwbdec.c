@@ -45,8 +45,9 @@ typedef struct {
     uint8_t                          fr_mode_ind; ///< mode indication field
     uint8_t                          fr_mode_req; ///< mode request field
     uint8_t                               fr_crc; ///< crc for class A bits
-    float                    isf_quant[LP_ORDER]; ///< quantized ISF vector from current frame
+    float                      isf_cur[LP_ORDER]; ///< working ISF vector from current frame
     float                   isf_q_past[LP_ORDER]; ///< quantized ISF vector of the previous frame
+    float               isf_past_final[LP_ORDER]; ///< final processed ISF vector of the prev frame
     double                      isp[4][LP_ORDER]; ///< ISP vectors from current frame
     double               isp_sub4_past[LP_ORDER]; ///< ISP vector for the 4th subframe of the previous frame
 
@@ -77,6 +78,7 @@ typedef struct {
     float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
 
     AVLFG                                   prng; ///< random number generator for white noise excitation
+    uint8_t                          first_frame; ///< flag active in the first frame decoded
 } AMRWBContext;
 
 static av_cold int amrwb_decode_init(AVCodecContext *avctx)
@@ -88,12 +90,12 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 
     av_lfg_init(&ctx->prng, 1);
 
-    ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
+    ctx->excitation  = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
+    ctx->first_frame = 1;
+    ctx->tilt_coef   = ctx->prev_tr_gain = 0.0;
 
     for (i = 0; i < LP_ORDER; i++)
-        ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
-
-    ctx->tilt_coef = ctx->prev_tr_gain = 0.0;
+        ctx->isf_past_final[i] = isf_init[i] / (float) (1 << 15);
 
     for (i = 0; i < 4; i++)
         ctx->prediction_error[i] = MIN_ENERGY;
@@ -278,7 +280,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
     int i;
     float prev = 0.0;
 
-    for (i = 0; i < size; i++) {
+    for (i = 0; i < size - 1; i++) {
         isf[i] = FFMAX(isf[i], prev + min_spacing);
         prev = isf[i];
     }
@@ -813,7 +815,9 @@ static float stability_factor(const float *isf, const float *isf_past)
     for (i = 0; i < LP_ORDER - 1; i++)
         acc += (isf[i] - isf_past[i]) * (isf[i] - isf_past[i]);
 
-    return 1.25 - acc * 0.8 / 256;
+    // XXX: I could not understand well this part from ref code
+    // it made more sense changing the "/ 256" to "* 256"
+    return FFMAX(0.0, 1.25 - acc * 0.8 * 256);
 }
 
 /**
@@ -1073,20 +1077,26 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     /* Decode the quantized ISF vector */
     if (ctx->fr_cur_mode == MODE_6k60) {
-        decode_isf_indices_36b(cf->isp_id, ctx->isf_quant, ctx->fr_quality);
+        decode_isf_indices_36b(cf->isp_id, ctx->isf_cur, ctx->fr_quality);
     }
     else {
-        decode_isf_indices_46b(cf->isp_id, ctx->isf_quant, ctx->fr_quality);
+        decode_isf_indices_46b(cf->isp_id, ctx->isf_cur, ctx->fr_quality);
     }
 
-    stab_fac = stability_factor(ctx->isf_quant, ctx->isf_q_past);
+    isf_add_mean_and_past(ctx->isf_cur, ctx->isf_q_past);
+    isf_set_min_dist(ctx->isf_cur, MIN_ISF_SPACING, LP_ORDER);
 
-    isf_add_mean_and_past(ctx->isf_quant, ctx->isf_q_past);
-    isf_set_min_dist(ctx->isf_quant, MIN_ISF_SPACING, LP_ORDER);
+    stab_fac = stability_factor(ctx->isf_cur, ctx->isf_past_final);
 
-    isf2isp(ctx->isf_quant, ctx->isp[3]);
+    isf2isp(ctx->isf_cur, ctx->isp[3]);
     /* Generate a ISP vector for each subframe */
+    if (ctx->first_frame) {
+        ctx->first_frame = 0;
+        memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(double));
+    }
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
+
+    /* XXX: Tested against the ref code until here */
 
     for (sub = 0; sub < 4; sub++)
         isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
@@ -1170,6 +1180,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     // update state for next frame
     memcpy(ctx->isp_sub4_past, ctx->isp[3], LP_ORDER * sizeof(ctx->isp[3][0]));
+    memcpy(ctx->isf_past_final, ctx->isf_cur, LP_ORDER * sizeof(float));
 
     /* report how many samples we got */
     *data_size = 4 * AMRWB_SFR_SIZE_OUT * sizeof(float);
