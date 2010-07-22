@@ -90,10 +90,8 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 
     ctx->excitation = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
 
-    for (i = 0; i < LP_ORDER; i++) {
-        ctx->isf_q_past[i]    = isf_init[i] / (float) (1 << 15);
+    for (i = 0; i < LP_ORDER; i++)
         ctx->isp_sub4_past[i] = isp_init[i] / (float) (1 << 15);
-    }
 
     ctx->tilt_coef = ctx->prev_tr_gain = 0.0;
 
@@ -262,8 +260,8 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
 
     for (i = 0; i < LP_ORDER; i++) {
         tmp = isf_q[i];
-        isf_q[i] = tmp + isf_mean[i] / (float) (1<<15);
-        isf_q[i] = isf_q[i] + PRED_FACTOR * isf_past[i];
+        isf_q[i] += isf_mean[i] / (float) (1<<15);
+        isf_q[i] += PRED_FACTOR * isf_past[i];
         isf_past[i] = tmp;
     }
 }
