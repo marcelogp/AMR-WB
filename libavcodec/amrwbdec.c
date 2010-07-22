@@ -1038,6 +1038,50 @@ static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
         hb_exc[i] *= hb_gain;
 }
 
+static float auto_correlation(float *diff_isf, float mean, int lag)
+{
+    int i;
+    float sum = 0.0;
+
+    for (i = 7; i < LP_ORDER - 2; i++) {
+        float prod = (diff_isf[i] - mean) * (diff_isf[i - lag] - mean);
+        sum += prod * prod;
+    }
+    return sum;
+}
+
+static void extrapolate_isf(float *out, float *isf)
+{
+    float diff_isf[LP_ORDER - 2], diff_mean;
+    float corr_lag[3];
+    int i, i_max_corr;
+
+    memcpy(out, isf, LP_ORDER - 1);
+    out[LP_ORDER_16k - 1] = isf[LP_ORDER - 1];
+
+    /* Calculate the difference vector */
+    for (i = 0; i < LP_ORDER - 2; i++)
+        diff_isf[i] = isf[i + 1] - isf[i];
+
+    diff_mean = 0.0;
+    for (i = 2; i < LP_ORDER - 2; i++)
+        diff_mean += diff_isf[i] / (LP_ORDER - 4);
+
+    /* Find which is the maximum autocorrelation */
+    i_max_corr = 0;
+    for (i = 0; i < 3; i++) {
+        corr_lag[i] = auto_correlation(diff_isf, diff_mean, i + 2);
+        if (corr_lag[i] > corr_lag[i_max_corr])
+            i_max_corr = i;
+    }
+    i_max_corr++;
+
+    for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
+        out[i] = isf[i - 1] + isf[i - 1 - i_max_corr]
+                            - isf[i - 2 - i_max_corr];
+    return;
+}
+
 /**
  * Update context state before the next subframe
  */

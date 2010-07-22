@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #define LP_ORDER              16               ///< linear predictive coding filter order
+#define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
 #define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
