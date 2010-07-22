@@ -25,8 +25,8 @@
 #include <stdint.h>
 
 #define LP_ORDER              16               ///< linear predictive coding filter order
-#define MIN_ISF_SPACING       50.0             // XXX: Taken from fixed-point 26.173, not sure
-#define PRED_FACTOR           (1.0/3.0)
+#define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
+#define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
 
@@ -1611,10 +1611,10 @@ static const int16_t isf_mean[LP_ORDER] = {
   8750,  9753, 10705, 11728, 12833, 13971, 15043,  4037
 };
 
-/* Initialization tables for the ISP vector */
-static const int16_t isp_init[LP_ORDER] = {
-  32138,  30274,  27246,  23170,  18205,  12540,   6393,    0,
-  -6393, -12540, -18205, -23170, -27246, -30274, -32138, 1475
+/* Initialization tables for the processed ISF vector */
+static const int16_t isf_init[LP_ORDER] = {
+  1024,  2048,  3072,  4096,  5120,  6144,  7168, 8192,
+  9216, 10240, 11264, 12288, 13312, 14336, 15360, 3840
 };
 
 /* Coefficients for FIR interpolation of excitation vector
