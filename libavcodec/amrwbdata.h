@@ -34,7 +34,9 @@
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe at 12.8 kHz
 #define AMRWB_SFR_SIZE_OUT    80               ///< samples per subframe at 16 kHz
 #define AMRWB_SAMPLE_BOUND    32768.0          ///< threshold for synthesis overflow
-#define PITCH_MAX             231              ///< maximum received pitch delay value
+
+#define AMRWB_P_DELAY_MAX     231              ///< maximum pitch delay value
+#define AMRWB_P_DELAY_MIN     34
 
 #define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
 

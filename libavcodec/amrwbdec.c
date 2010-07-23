@@ -56,7 +56,7 @@ typedef struct {
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for next relative subframe
     uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
 
-    float excitation_buf[PITCH_MAX + LP_ORDER + 1 + AMRWB_SUBFRAME_SIZE]; ///< current excitation and all necessary excitation history
+    float excitation_buf[AMRWB_P_DELAY_MAX + LP_ORDER + 1 + AMRWB_SUBFRAME_SIZE]; ///< current excitation and all necessary excitation history
     float                            *excitation; ///< points to current excitation in excitation_buf[]
 
     float      pitch_vector[AMRWB_SUBFRAME_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
@@ -90,7 +90,7 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 
     av_lfg_init(&ctx->prng, 1);
 
-    ctx->excitation  = &ctx->excitation_buf[PITCH_MAX + LP_ORDER + 1];
+    ctx->excitation  = &ctx->excitation_buf[AMRWB_P_DELAY_MAX + LP_ORDER + 1];
     ctx->first_frame = 1;
     ctx->tilt_coef   = ctx->prev_tr_gain = 0.0;
 
@@ -254,11 +254,11 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
  * Apply mean and past ISF values using the prediction factor
  * Updates past ISF vector
  *
- * @param isf_q               [in] current quantized ISF
+ * @param isf_q               [in/out] current quantized ISF
  * @param isf_past            [in/out] past quantized ISF
  *
  */
-static void isf_add_mean_and_past(const float *isf_q, float *isf_past) {
+static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
     int i;
     float tmp;
 
@@ -295,7 +295,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
  * @param isp_q               [in/out] ISPs for each subframe
  * @param isp4_past           [in] Past ISP for subframe 4
  */
-static void interpolate_isp(double *isp_q[4], const double *isp4_past)
+static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
 {
     int i;
     // XXX: Did not use ff_weighted_vector_sumf because using double
@@ -355,7 +355,7 @@ static void isp2lp(const double *isp, float *lp, int lp_half_order) {
  * @param subframe            [in] Current subframe index (0 to 3)
  */
 static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
-                                  uint8_t *base_lag_int, const int subframe)
+                                  uint8_t *base_lag_int, int subframe)
 {
     if (subframe == 0 || subframe == 2) {
         if (pitch_index < 376) {
@@ -369,47 +369,30 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
             *lag_int  = pitch_index - 280;
             *lag_frac = 0;
         }
-        *base_lag_int = *lag_int; // store previous lag
+        /* minimum lag for next subframe */
+        *base_lag_int = av_clip(*lag_int - 8, AMRWB_P_DELAY_MIN,
+                                AMRWB_P_DELAY_MAX - 15);
+        /* XXX: the spec states clearly that *base_lag_int should be
+         * the nearest integer to *lag_int (minus 8), but the ref code
+         * actually uses always its floor, causing the next frame integer
+         * lag to be one less than mine when the nearest integer is
+         * not equal to the floor */
     } else {
         *lag_int  = (pitch_index + 1) >> 2;
         *lag_frac = pitch_index - (*lag_int << 2);
-        *lag_int += *base_lag_int - 8;
-        // XXX: Doesn't seem to need bounding according to TS 26.190
+        *lag_int += *base_lag_int;
     }
 }
 
 /**
- * Decode a adaptive codebook index into pitch lag for 8k85 mode
- * Description is analogous to decode_pitch_lag_high
- */
-static void decode_pitch_lag_8K85(int *lag_int, int *lag_frac, int pitch_index,
-                                  uint8_t *base_lag_int, const int subframe)
-{
-    if (subframe == 0 || subframe == 2) {
-        if (pitch_index < 116) {
-            *lag_int  = (pitch_index + 69) >> 1;
-            *lag_frac = (pitch_index - (*lag_int << 1) + 68) << 1;
-        } else {
-            *lag_int  = pitch_index - 24;
-            *lag_frac = 0;
-        }
-        *base_lag_int = *lag_int;
-    } else {
-        *lag_int  = (pitch_index + 1) >> 1;
-        *lag_frac = pitch_index - (*lag_int << 1);
-        *lag_int += *base_lag_int - 8;
-    }
-}
-
-/**
- * Decode a adaptive codebook index into pitch lag for 6k60 mode
- * Description is analogous to decode_pitch_lag_high, but relative
+ * Decode a adaptive codebook index into pitch lag for 8k85 and 6k60 modes
+ * Description is analogous to decode_pitch_lag_high, but in 6k60 relative
  * index is used for all subframes except the first
  */
-static void decode_pitch_lag_6K60(int *lag_int, int *lag_frac, int pitch_index,
-                                  uint8_t *base_lag_int, const int subframe)
+static void decode_pitch_lag_low(int *lag_int, int *lag_frac, int pitch_index,
+                        uint8_t *base_lag_int, int subframe, enum Mode mode)
 {
-    if (subframe == 0) {
+    if (subframe == 0 || (subframe == 2 && mode != MODE_6k60)) {
         if (pitch_index < 116) {
             *lag_int  = (pitch_index + 69) >> 1;
             *lag_frac = (pitch_index - (*lag_int << 1) + 68) << 1;
@@ -417,11 +400,12 @@ static void decode_pitch_lag_6K60(int *lag_int, int *lag_frac, int pitch_index,
             *lag_int  = pitch_index - 24;
             *lag_frac = 0;
         }
-        *base_lag_int = *lag_int;
+        *base_lag_int = av_clip(*lag_int - 8, AMRWB_P_DELAY_MIN,
+                                AMRWB_P_DELAY_MAX - 15);
     } else {
         *lag_int  = (pitch_index + 1) >> 1;
         *lag_frac = pitch_index - (*lag_int << 1);
-        *lag_int += *base_lag_int - 8;
+        *lag_int += *base_lag_int;
     }
 }
 
@@ -434,12 +418,9 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     float *exc     = ctx->excitation;
     enum Mode mode = ctx->fr_cur_mode;
 
-    if (mode == MODE_6k60) {
-        decode_pitch_lag_6K60(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
-                              &ctx->base_pitch_lag, subframe);
-    } else if (mode == MODE_8k85) {
-        decode_pitch_lag_8K85(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
-                              &ctx->base_pitch_lag, subframe);
+    if (mode <= MODE_8k85) {
+        decode_pitch_lag_low(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
+                              &ctx->base_pitch_lag, subframe, mode);
     } else
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
@@ -1010,9 +991,8 @@ static float find_hb_gain(AMRWBContext *ctx, const float *synth,
            ff_dot_productf(synth, synth, AMRWB_SUBFRAME_SIZE);
 
     tilt = FFMAX(0.0, tilt);
-
     /* return gain bounded by [0.1, 1.0] */
-    return FFMAX(0.1, FFMIN(1.0, (1.0 - tilt) * (1.25 - 0.25 * wsp)));
+    return av_clipf((1.0 - tilt) * (1.25 - 0.25 * wsp), 0.1, 1.0);
 }
 
 /**
