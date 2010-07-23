@@ -176,8 +176,10 @@ static void isf2isp(const float *isf, double *isp)
 {
     int i;
 
-    for (i = 0; i < LP_ORDER; i++)
+    for (i = 0; i < LP_ORDER - 1; i++)
         isp[i] = cos(2.0 * M_PI * isf[i]);
+
+    isp[LP_ORDER - 1] = cos(4.0 * M_PI * isf[LP_ORDER - 1]);
 }
 
 /**
@@ -256,7 +258,7 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
  * @param isf_past            [in/out] past quantized ISF
  *
  */
-static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
+static void isf_add_mean_and_past(const float *isf_q, float *isf_past) {
     int i;
     float tmp;
 
@@ -293,7 +295,7 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
  * @param isp_q               [in/out] ISPs for each subframe
  * @param isp4_past           [in] Past ISP for subframe 4
  */
-static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
+static void interpolate_isp(double *isp_q[4], const double *isp4_past)
 {
     int i;
     // XXX: Did not use ff_weighted_vector_sumf because using double
@@ -316,28 +318,29 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], double *isp4_past)
  * @param lp                  [out] LP coefficients
  * @param lp_half_order       [in] Half the number of LPs to construct
  */
-static void isp2lp(double isp[LP_ORDER], float *lp, int lp_half_order) {
+static void isp2lp(const double *isp, float *lp, int lp_half_order) {
     double pa[MAX_LP_HALF_ORDER+1], qa[MAX_LP_HALF_ORDER+1];
     float *lp2 = lp + (lp_half_order << 1);
     double last_isp = isp[2 * lp_half_order - 1];
-    double qa_old = 0; // XXX: qa[i-2] assuming qa[-1] = 0, not mentioned in spec
+    double qa_old = 0.0;
     int i;
 
     ff_lsp2polyf(isp,     pa, lp_half_order);
-    ff_lsp2polyf(isp + 1, qa, lp_half_order);
+    ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
 
-    for (i=1; i<lp_half_order; i++) {
+    for (i = 1; i < lp_half_order; i++) {
         double paf = (1 + last_isp) * pa[i];
         double qaf = (1 - last_isp) * (qa[i] - qa_old);
 
-        qa_old = qa[i-1];
+        qa_old = qa[i - 1];
 
-        lp[i]  = 0.5 * (paf + qaf);
-        lp2[i] = 0.5 * (paf - qaf);
+        lp[i]   = 0.5 * (paf + qaf);
+        lp2[-i] = 0.5 * (paf - qaf);
     }
 
-    lp2[0] = 0.5 * (1 + last_isp) * pa[lp_half_order] * lp_half_order;
-    lp2[lp_half_order] = last_isp;
+    lp[0] = 1.0;
+    lp[lp_half_order] = 0.5 * (1 + last_isp) * pa[lp_half_order];
+    lp2[0] = last_isp;
 }
 
 /**
@@ -1140,10 +1143,10 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     }
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
 
-    /* XXX: Tested against the ref code until here */
-
     for (sub = 0; sub < 4; sub++)
         isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
+
+    /* XXX: Tested against the ref code until here */
 
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
