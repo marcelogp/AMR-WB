@@ -430,12 +430,14 @@ static void decode_pitch_vector(AMRWBContext *ctx,
 
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
+    /* XXX: Not tested yet, need to ensure correct excitation construction before */
     ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int,
                           ac_inter, 4,
                           pitch_lag_frac + 4 - 4*(pitch_lag_frac > 0),
                           LP_ORDER, AMRWB_SUBFRAME_SIZE);
 
-    /* Check which pitch signal path should be used */
+    /* Check which pitch signal path should be used.
+     * 6k60 and 8k85 modes have ltp flag set to 0 */
     if (amr_subframe->ltp) {
         memcpy(ctx->pitch_vector, exc, AMRWB_SUBFRAME_SIZE * sizeof(float));
     } else {
@@ -526,9 +528,9 @@ static void decode_5p_track(int *out, int code, int m, int off)
 {   ///code: 5m bits
     int half_3p = BIT_POS(code, 5*m - 1) << (m - 1);
 
-    decode_3p_track(out, BIT_STR(code, 2*m, 3*m - 2),
+    decode_3p_track(out, BIT_STR(code, 2*m + 1, 3*m - 2),
                     m - 1, off + half_3p);
-    // XXX: there seems to be a typo in I3p expoent (from reference)
+
     decode_2p_track(out + 3, BIT_STR(code, 0, 2*m + 1), m, off);
 }
 
@@ -1070,6 +1072,9 @@ static void extrapolate_isf(float *out, float *isf)
  */
 static void update_sub_state(AMRWBContext *ctx)
 {
+    memmove(&ctx->excitation_buf[0], &ctx->excitation_buf[AMRWB_SUBFRAME_SIZE],
+            (AMRWB_P_DELAY_MAX + LP_ORDER + 1) * sizeof(float));
+
     memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
     memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
 }
@@ -1126,8 +1131,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     for (sub = 0; sub < 4; sub++)
         isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
 
-    /* XXX: Tested against the ref code until here */
-
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
 
@@ -1140,6 +1143,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
                      &fixed_gain_factor, &ctx->pitch_gain[4]);
 
+        /* XXX: not tested yet */
         pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
 
         ctx->fixed_gain[4] =
@@ -1153,6 +1157,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         voice_fac      = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
                                       ctx->fixed_vector, ctx->fixed_gain[4]);
         ctx->tilt_coef = voice_fac * 0.25 + 0.25;
+
+        /* XXX: Tested against the ref code until here */
 
         /* Construct current excitation */
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
