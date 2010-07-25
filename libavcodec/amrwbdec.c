@@ -404,7 +404,7 @@ static void decode_pitch_lag_low(int *lag_int, int *lag_frac, int pitch_index,
                                 AMRWB_P_DELAY_MAX - 15);
     } else {
         *lag_int  = (pitch_index + 1) >> 1;
-        *lag_frac = pitch_index - (*lag_int << 1);
+        *lag_frac = (pitch_index - (*lag_int << 1)) << 1;
         *lag_int += *base_lag_int;
     }
 }
@@ -681,6 +681,9 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
 static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
                              float *fixed_vector)
 {
+    /* XXX: The resulting fixed_vector is a bit different comparing
+     * to opencore, probably because the filters are applied in reverse order */
+
     /* Periodicity enhancement part */
     fixed_sparse->pitch_lag = ctx->pitch_lag_int;
     fixed_sparse->pitch_fac = 0.85;
@@ -724,6 +727,9 @@ static float *anti_sparseness(AMRWBContext *ctx,
                               float *fixed_vector, float *out)
 {
     int ir_filter_nr;
+
+    if (ctx->fr_cur_mode > MODE_8k85) // no filtering in high modes
+        return fixed_vector;
 
     if (ctx->pitch_gain[4] < 0.6) {
         ir_filter_nr = 0;      // strong filtering
