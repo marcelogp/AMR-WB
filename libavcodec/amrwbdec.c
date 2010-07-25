@@ -425,7 +425,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
 
-    ctx->pitch_lag_int = pitch_lag_int;
+    ctx->pitch_lag_int = pitch_lag_int + (pitch_lag_frac < 0 ? -1 : 0);
     pitch_lag_int     += pitch_lag_frac > 0;
 
     /* Calculate the pitch vector by interpolating the past excitation at the
@@ -681,9 +681,6 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
 static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
                              float *fixed_vector)
 {
-    /* XXX: The resulting fixed_vector is a bit different comparing
-     * to opencore, probably because the filters are applied in reverse order */
-
     /* Periodicity enhancement part */
     fixed_sparse->pitch_lag = ctx->pitch_lag_int;
     fixed_sparse->pitch_fac = 0.85;
@@ -1149,7 +1146,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
                      &fixed_gain_factor, &ctx->pitch_gain[4]);
 
-        /* XXX: not tested yet */
         pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
 
         ctx->fixed_gain[4] =
@@ -1164,8 +1160,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                                       ctx->fixed_vector, ctx->fixed_gain[4]);
         ctx->tilt_coef = voice_fac * 0.25 + 0.25;
 
-        /* XXX: Tested against the ref code until here */
-
         /* Construct current excitation */
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
             ctx->excitation[i] *= ctx->pitch_gain[4];
@@ -1177,11 +1171,15 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         }
 
         /* Post-processing of excitation elements */
+        /* XXX: Noise_enhancer was not tested yet, needs that 1.5dB check */
         synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
 
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
                                              spare_vector);
+
+        /* XXX: Tested against the ref code until here, it "succeeds" at least
+         * for cases in which the "opencore bug" don't interfere */
 
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
