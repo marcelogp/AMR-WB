@@ -872,7 +872,6 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
 
 /**
  * Conduct 16th order linear predictive coding synthesis from excitation
- * Return a overflow detection flag
  *
  * @param ctx                 [in] pointer to the AMRWBContext
  * @param lpc                 [in] pointer to the LPC coefficients
@@ -880,25 +879,17 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
  * @param fixed_gain          [in] fixed codebook gain for synthesis
  * @param fixed_vector        [in] algebraic codebook vector
  * @param samples             [out] pointer to the output speech samples
- * @param overflow            [in] 16-bit predicted overflow flag
  */
-static uint8_t synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
+static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                      float fixed_gain, const float *fixed_vector,
-                     float *samples, uint8_t overflow)
+                     float *samples)
 {
-    int i;
-
-    // if an overflow has been detected, the pitch vector is scaled down by a
-    // factor of 4
-    if (overflow)
-        for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
-            ctx->pitch_vector[i] *= 0.25;
-
     ff_weighted_vector_sumf(excitation, ctx->pitch_vector, fixed_vector,
                             ctx->pitch_gain[4], fixed_gain, AMRWB_SUBFRAME_SIZE);
 
     // emphasize pitch vector contribution in low bitrate modes
-    if (ctx->pitch_gain[4] > 0.5 && !overflow && ctx->fr_cur_mode <= MODE_8k85) {
+    if (ctx->pitch_gain[4] > 0.5 && ctx->fr_cur_mode <= MODE_8k85) {
+        int i;
         float energy = ff_dot_productf(excitation, excitation,
                                        AMRWB_SUBFRAME_SIZE);
 
@@ -915,14 +906,6 @@ static uint8_t synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
 
     ff_celp_lp_synthesis_filterf(samples, lpc, excitation,
                                  AMRWB_SUBFRAME_SIZE, LP_ORDER);
-
-    // detect overflow
-    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
-        if (fabsf(samples[i]) > AMRWB_SAMPLE_BOUND) {
-            return 1;
-        }
-
-    return 0;
 }
 
 /**
@@ -1083,6 +1066,9 @@ static void update_sub_state(AMRWBContext *ctx)
 
     memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
     memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
+
+    memmove(&ctx->samples_in[0], &ctx->samples_in[AMRWB_SUBFRAME_SIZE],
+            LP_ORDER * sizeof(float));
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
@@ -1174,7 +1160,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         }
 
         /* Post-processing of excitation elements */
-        /* XXX: Noise_enhancer was not tested yet, needs that 1.5dB check */
         synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
 
@@ -1186,13 +1171,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
-        if (synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
-                      synth_fixed_vector, &ctx->samples_in[LP_ORDER], 0))
-            // overflow detected -> rerun synthesis scaling pitch vector down
-            // by a factor of 4, skipping pitch vector contribution emphasis
-            // and adaptive gain control
-            synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
-                      synth_fixed_vector, &ctx->samples_in[LP_ORDER], 1);
+        synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
+                  synth_fixed_vector, &ctx->samples_in[LP_ORDER]);
 
         /* Synthesis speech post-processing */
         de_emphasis(&ctx->samples_in[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
