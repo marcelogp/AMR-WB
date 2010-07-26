@@ -78,7 +78,7 @@ typedef struct {
     float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
 
     AVLFG                                   prng; ///< random number generator for white noise excitation
-    uint8_t                          first_frame; ///< flag active in the first frame decoded
+    uint8_t                          first_frame; ///< flag active during decoding of the first frame
 } AMRWBContext;
 
 static av_cold int amrwb_decode_init(AVCodecContext *avctx)
@@ -437,7 +437,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
                           LP_ORDER, AMRWB_SUBFRAME_SIZE);
 
     /* Check which pitch signal path should be used.
-     * 6k60 and 8k85 modes have ltp flag set to 0 */
+     * 6k60 and 8k85 modes have the ltp flag set to 0 */
     if (amr_subframe->ltp) {
         memcpy(ctx->pitch_vector, exc, AMRWB_SUBFRAME_SIZE * sizeof(float));
     } else {
@@ -805,8 +805,8 @@ static float stability_factor(const float *isf, const float *isf_past)
         acc += (isf[i] - isf_past[i]) * (isf[i] - isf_past[i]);
 
     // XXX: I could not understand well this part from ref code
-    // it made more sense changing the "/ 256" to "* 256"
-    return FFMAX(0.0, 1.25 - acc * 0.8 * 256);
+    // it made more sense changing the "/ 256" to "* 512"
+    return FFMAX(0.0, 1.25 - acc * 0.8 * 512);
 }
 
 /**
@@ -855,6 +855,9 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
     float cpe = 0.125 * (1 + voice_fac);
     float last = fixed_vector[0]; // holds c(i - 1)
 
+    /* XXX: This procedure seems correct, but due to some roundings
+     * in the opencore code (line 1037 onwards) the resulting fixed_vector
+     * differs quite a bit between the two implementations */
     fixed_vector[0] -= cpe * fixed_vector[1];
 
     for (i = 1; i < AMRWB_SUBFRAME_SIZE - 1; i++) {
