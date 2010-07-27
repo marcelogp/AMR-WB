@@ -26,10 +26,14 @@
 
 #define LP_ORDER              16               ///< linear predictive coding filter order
 #define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
+#define UPS_FIR_SIZE          12               ///< upsampling filter size
+#define SAMPLE_MEM            24               ///< number of stored past samples given by
+                                               ///< max(LP_ORDER, UPS_FIR_SIZE * 2)
 #define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
+#define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
 
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe at 12.8 kHz
 #define AMRWB_SFR_SIZE_OUT    80               ///< samples per subframe at 16 kHz
@@ -37,8 +41,6 @@
 
 #define AMRWB_P_DELAY_MAX     231              ///< maximum pitch delay value
 #define AMRWB_P_DELAY_MIN     34
-
-#define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
 
 /* Mode ordering is sensitive, do not change */
 enum Mode {
@@ -1757,7 +1759,6 @@ static const float energy_pred_fac[4] = { 0.2, 0.3, 0.4, 0.5 };
 
 /** impulse response filter tables converted to float from Q15
  * used for anti-sparseness processing */
-// XXX: Not sure whether it is Q15 indeed
 static const float ir_filter_str[64] = {
      0.615906,  0.295807,  0.099792, -0.104889,  0.087402, -0.159912,
      0.048492, -0.041412,  0.018311,  0.118805, -0.045685, -0.021301,
@@ -1800,6 +1801,35 @@ static const float hpf_31_coef[2][3] = {        //  31 kHz cutoff filter
 static const float hpf_400_coef[2][3] = {       // 400 kHz cutoff filter
     { 0.893554687, -1.787109375, 0.893554687 },
     { 1.787109375, -0.864257812, 0           }
+};
+
+/* Interpolation coefficients for 5/4 signal upsampling
+ * Table from the reference source was reordered for efficiency */
+static const float upsample_fir[4][24] = {
+    { -6.103516e-05,  7.324219e-04, -2.014160e-03,  4.150391e-03,
+      -7.263184e-03,  1.165771e-02, -1.776123e-02,  2.624512e-02,
+      -3.869629e-02,  5.877686e-02, -9.863281e-02,  2.314453e-01,
+       9.348755e-01, -1.523438e-01,  7.861328e-02, -4.937744e-02,
+       3.308105e-02, -2.252197e-02,  1.507568e-02, -9.765625e-03,
+       5.859375e-03, -3.173828e-03,  1.403809e-03, -3.662109e-04  },
+    { -2.441406e-04,  1.464844e-03, -3.784180e-03,  7.568359e-03,
+      -1.300049e-02,  2.062988e-02, -3.112793e-02,  4.589844e-02,
+      -6.781006e-02,  1.042480e-01, -1.815186e-01,  5.016479e-01,
+       7.548828e-01, -2.094727e-01,  1.148071e-01, -7.348633e-02,
+       4.956055e-02, -3.369141e-02,  2.246094e-02, -1.434326e-02,
+       8.483887e-03, -4.455566e-03,  1.831055e-03, -4.272461e-04  },
+    { -4.272461e-04,  1.831055e-03, -4.455566e-03,  8.483887e-03,
+      -1.434326e-02,  2.246094e-02, -3.369141e-02,  4.956055e-02,
+      -7.348633e-02,  1.148071e-01, -2.094727e-01,  7.548828e-01,
+       5.016479e-01, -1.815186e-01,  1.042480e-01, -6.781006e-02,
+       4.589844e-02, -3.112793e-02,  2.062988e-02, -1.300049e-02,
+       7.568359e-03, -3.784180e-03,  1.464844e-03, -2.441406e-04  },
+    { -3.662109e-04,  1.403809e-03, -3.173828e-03,  5.859375e-03,
+      -9.765625e-03,  1.507568e-02, -2.252197e-02,  3.308105e-02,
+      -4.937744e-02,  7.861328e-02, -1.523438e-01,  9.348755e-01,
+       2.314453e-01, -9.863281e-02,  5.877686e-02, -3.869629e-02,
+       2.624512e-02, -1.776123e-02,  1.165771e-02, -7.263184e-03,
+       4.150391e-03, -2.014160e-03,  7.324219e-04, -6.103516e-05  }
 };
 
 /* High band quantized gains for 23k85 in Q14 */
