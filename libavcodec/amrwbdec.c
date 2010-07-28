@@ -584,7 +584,7 @@ static void decode_6p_track(int *out, int code, int m, int off)
 static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi,
                                 const uint16_t *pulse_lo, const enum Mode mode)
 {
-    /* sig_pos stores for each track the decoded pulse position
+    /* sig_pos stores for each track the decoded pulse position (1-based)
      * indexes multiplied by its corresponding amplitude (+1 or -1) */
     int sig_pos[4][6];
     int pulses_nb = 0;
@@ -594,51 +594,51 @@ static void decode_fixed_sparse(AMRFixed *fixed_sparse, const uint16_t *pulse_hi
     switch (mode) {
         case MODE_6k60:
             for (i = 0; i < 2; i++)
-                decode_1p_track(sig_pos[i], pulse_lo[i], 5, 0);
+                decode_1p_track(sig_pos[i], pulse_lo[i], 5, 1);
             break;
         case MODE_8k85:
             for (i = 0; i < 4; i++)
-                decode_1p_track(sig_pos[i], pulse_lo[i], 4, 0);
+                decode_1p_track(sig_pos[i], pulse_lo[i], 4, 1);
             break;
         case MODE_12k65:
             for (i = 0; i < 4; i++)
-                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 0);
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 1);
             break;
         case MODE_14k25:
             for (i = 0; i < 2; i++)
-                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 0);
+                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 1);
             for (i = 2; i < 4; i++)
-                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 0);
+                decode_2p_track(sig_pos[i], pulse_lo[i], 4, 1);
             break;
         case MODE_15k85:
             for (i = 0; i < 4; i++)
-                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 0);
+                decode_3p_track(sig_pos[i], pulse_lo[i], 4, 1);
             break;
         case MODE_18k25:
             for (i = 0; i < 4; i++)
                 decode_4p_track(sig_pos[i], (int) pulse_lo[i] +
-                               ((int) pulse_hi[i] << 14), 4, 0);
+                               ((int) pulse_hi[i] << 14), 4, 1);
             break;
         case MODE_19k85:
             for (i = 0; i < 2; i++)
                 decode_5p_track(sig_pos[i], (int) pulse_lo[i] +
-                               ((int) pulse_hi[i] << 10), 4, 0);
+                               ((int) pulse_hi[i] << 10), 4, 1);
             for (i = 2; i < 4; i++)
                 decode_4p_track(sig_pos[i], (int) pulse_lo[i] +
-                               ((int) pulse_hi[i] << 14), 4, 0);
+                               ((int) pulse_hi[i] << 14), 4, 1);
             break;
         case MODE_23k05:
         case MODE_23k85:
             for (i = 0; i < 4; i++)
                 decode_6p_track(sig_pos[i], (int) pulse_lo[i] +
-                               ((int) pulse_hi[i] << 11), 4, 0);
+                               ((int) pulse_hi[i] << 11), 4, 1);
             break;
     }
 
     for (i = 0; i < 4; i++)
         for (j = 0; j < pulses_nb_per_mode_tr[mode][i]; j++) {
             int pos = sig_pos[i][j];
-            fixed_sparse->x[pulses_nb] = FFABS(pos) * spacing + i;
+            fixed_sparse->x[pulses_nb] = (FFABS(pos) - 1) * spacing + i;
             fixed_sparse->y[pulses_nb] = pos < 0 ? -1.0 : 1.0;
             pulses_nb++;
         }
