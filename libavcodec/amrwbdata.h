@@ -27,7 +27,8 @@
 #define LP_ORDER              16               ///< linear predictive coding filter order
 #define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
 #define UPS_FIR_SIZE          12               ///< upsampling filter size
-#define SAMPLE_MEM            24               ///< number of stored past samples given by
+#define UPS_MEM_SIZE          2 * UPS_FIR_SIZE
+//#define SAMPLE_MEM            24               ///< number of stored past samples given by
                                                ///< max(LP_ORDER, UPS_FIR_SIZE * 2)
 #define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)

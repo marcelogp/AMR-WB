@@ -72,10 +72,11 @@ typedef struct {
     uint8_t                    prev_ir_filter_nr; ///< previous impulse response filter "impNr": 0 - strong, 1 - medium, 2 - none
     float                           prev_tr_gain; ///< previous initial gain used by noise enhancer for thresold
 
-    float samples_in[SAMPLE_MEM + AMRWB_SUBFRAME_SIZE]; ///< lower band floating point samples at 12.8kHz
+    float samples_az[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< lower band samples from synthesis at 12.8kHz
+    float samples_up[UPS_MEM_SIZE + AMRWB_SUBFRAME_SIZE]; ///< lower band samples processed for upsampling at 12.8kHz
 
-    float                           demph_mem[1]; ///< previous value in the de-emphasis filter
     float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
+    float                           demph_mem[1]; ///< previous value in the de-emphasis filter
 
     AVLFG                                   prng; ///< random number generator for white noise excitation
     uint8_t                          first_frame; ///< flag active during decoding of the first frame
@@ -912,20 +913,21 @@ static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
  * Apply to synthesis a de-emphasis filter of the form:
  * H(z) = 1 / (1 - m * z^-1)
  *
- * @param synth               [in/out] synthesized speech array
+ * @param out                 [out] output buffer
+ * @param in                  [in] input samples array with in[-1]
  * @param m                   [in] filter coefficient
- * @param mem                 [in] state from last filtering
+ * @param mem                 [in/out] state from last filtering
  */
-static void de_emphasis(float *synth, float m, float mem[1])
+static void de_emphasis(float *out, float *in, float m, float mem[1])
 {
     int i;
 
-    synth[0] += m * mem[0];
+    out[0] = in[0] + m * mem[0];
 
-    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
-        synth[i] += synth[i - 1] * m;
+    for (i = 1; i < AMRWB_SUBFRAME_SIZE; i++)
+         out[i] = in[i] + out[i - 1] * m;
 
-    mem[0] = synth[AMRWB_SUBFRAME_SIZE - 1];
+    mem[0] = out[AMRWB_SUBFRAME_SIZE - 1];
 }
 
 /**
@@ -981,7 +983,7 @@ static void upsample_5_4(float *out, const float *in, int o_size)
             out[i] = in[i];
         } else
             out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
-                                     UPS_FIR_SIZE << 1);
+                                     UPS_MEM_SIZE);
 
         out[i] *= 2.0; // upscale output
     }
@@ -1094,8 +1096,10 @@ static void update_sub_state(AMRWBContext *ctx)
     memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
     memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
 
-    memmove(&ctx->samples_in[0], &ctx->samples_in[AMRWB_SUBFRAME_SIZE],
-            SAMPLE_MEM * sizeof(float));
+    memmove(&ctx->samples_az[0], &ctx->samples_az[AMRWB_SUBFRAME_SIZE],
+            LP_ORDER * sizeof(float));
+    memmove(&ctx->samples_up[0], &ctx->samples_up[AMRWB_SUBFRAME_SIZE],
+            UPS_MEM_SIZE * sizeof(float));
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
@@ -1200,22 +1204,23 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
         synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
-                  synth_fixed_vector, &ctx->samples_in[SAMPLE_MEM]);
+                  synth_fixed_vector, &ctx->samples_az[LP_ORDER]);
 
         /* Synthesis speech post-processing */
-        de_emphasis(&ctx->samples_in[SAMPLE_MEM], PREEMPH_FAC, ctx->demph_mem);
+        de_emphasis(&ctx->samples_up[UPS_MEM_SIZE],
+                    &ctx->samples_az[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
 
-        high_pass_filter(&ctx->samples_in[SAMPLE_MEM], hpf_31_coef,
-                         ctx->hpf_31_mem, &ctx->samples_in[SAMPLE_MEM]);
+        high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_31_coef,
+                         ctx->hpf_31_mem, &ctx->samples_up[UPS_MEM_SIZE]);
 
         upsample_5_4(buf_out + sub * AMRWB_SFR_SIZE_OUT,
-                     &ctx->samples_in[UPS_FIR_SIZE], AMRWB_SFR_SIZE_OUT);
+                     &ctx->samples_up[UPS_FIR_SIZE], AMRWB_SFR_SIZE_OUT);
 
         /* High frequency band generation */
-        high_pass_filter(&ctx->samples_in[SAMPLE_MEM], hpf_400_coef,
-                         ctx->hpf_400_mem, &ctx->samples_in[SAMPLE_MEM]);
+        high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_400_coef,
+                         ctx->hpf_400_mem, &ctx->samples_up[UPS_MEM_SIZE]);
 
-        hb_gain = find_hb_gain(ctx, &ctx->samples_in[SAMPLE_MEM],
+        hb_gain = find_hb_gain(ctx, &ctx->samples_up[UPS_MEM_SIZE],
                                cur_subframe->hb_gain, cf->vad);
 
         scaled_hb_excitation(ctx, hb_exc, synth_exc, hb_gain);
