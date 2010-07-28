@@ -51,7 +51,7 @@ typedef struct {
     double                      isp[4][LP_ORDER]; ///< ISP vectors from current frame
     double               isp_sub4_past[LP_ORDER]; ///< ISP vector for the 4th subframe of the previous frame
 
-    float                   lp_coef[4][LP_ORDER]; ///< Linear Prediction Coefficients from ISP vector
+    float               lp_coef[4][LP_ORDER + 1]; ///< Linear Prediction Coefficients from ISP vector
 
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for next relative subframe
     uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
@@ -905,7 +905,7 @@ static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                                                 energy, AMRWB_SUBFRAME_SIZE);
     }
 
-    ff_celp_lp_synthesis_filterf(samples, lpc, excitation,
+    ff_celp_lp_synthesis_filterf(samples, lpc + 1, excitation,
                                  AMRWB_SUBFRAME_SIZE, LP_ORDER);
 }
 
@@ -985,7 +985,7 @@ static void upsample_5_4(float *out, const float *in, int o_size)
             out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
                                      UPS_MEM_SIZE);
 
-        out[i] *= 2.0; // upscale output
+        out[i] *= 2.0 / 32768.0; // upscale output
     }
 }
 
