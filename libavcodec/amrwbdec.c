@@ -63,8 +63,8 @@ typedef struct {
     float      fixed_vector[AMRWB_SUBFRAME_SIZE]; ///< algebraic codebook (fixed) vector
 
     float                    prediction_error[4]; ///< quantified prediction errors {20log10(^gamma_gc)} for previous four subframes
-    float                          pitch_gain[5]; ///< quantified pitch gains for the current and previous four subframes
-    float                          fixed_gain[5]; ///< quantified fixed gains for the current and previous four subframes
+    float                          pitch_gain[6]; ///< quantified pitch gains for the current and previous five subframes
+    float                          fixed_gain[2]; ///< quantified fixed gains for the current and previous subframes
 
     float                              tilt_coef; ///< {beta_1} related to the voicing of the previous subframe
 
@@ -729,22 +729,22 @@ static float *anti_sparseness(AMRWBContext *ctx,
     if (ctx->fr_cur_mode > MODE_8k85) // no filtering in high modes
         return fixed_vector;
 
-    if (ctx->pitch_gain[4] < 0.6) {
+    if (ctx->pitch_gain[0] < 0.6) {
         ir_filter_nr = 0;      // strong filtering
-    } else if (ctx->pitch_gain[4] < 0.9) {
+    } else if (ctx->pitch_gain[0] < 0.9) {
         ir_filter_nr = 1;      // medium filtering
     } else
         ir_filter_nr = 2;      // no filtering
 
     // detect 'onset'
-    if (ctx->fixed_gain[4] > 3.0 * ctx->fixed_gain[3]) {
+    if (ctx->fixed_gain[0] > 3.0 * ctx->fixed_gain[1]) {
         if (ir_filter_nr < 2)
             ir_filter_nr++;
     } else
     {
         int i, count = 0;
 
-        for (i = 0; i < 5; i++)
+        for (i = 0; i < 6; i++)
             if (ctx->pitch_gain[i] < 0.6)
                 count++;
         if (count > 2)
@@ -886,17 +886,17 @@ static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                      float *samples)
 {
     ff_weighted_vector_sumf(excitation, ctx->pitch_vector, fixed_vector,
-                            ctx->pitch_gain[4], fixed_gain, AMRWB_SUBFRAME_SIZE);
+                            ctx->pitch_gain[0], fixed_gain, AMRWB_SUBFRAME_SIZE);
 
     // emphasize pitch vector contribution in low bitrate modes
-    if (ctx->pitch_gain[4] > 0.5 && ctx->fr_cur_mode <= MODE_8k85) {
+    if (ctx->pitch_gain[0] > 0.5 && ctx->fr_cur_mode <= MODE_8k85) {
         int i;
         float energy = ff_dot_productf(excitation, excitation,
                                        AMRWB_SUBFRAME_SIZE);
 
         // XXX: Weird part in both ref code and spec. A unknown parameter
         // {beta} seems to be identical to the current pitch gain
-        float pitch_factor = 0.25 * ctx->pitch_gain[4] * ctx->pitch_gain[4];
+        float pitch_factor = 0.25 * ctx->pitch_gain[0] * ctx->pitch_gain[0];
 
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
             excitation[i] += pitch_factor * ctx->pitch_vector[i];
@@ -1093,8 +1093,8 @@ static void update_sub_state(AMRWBContext *ctx)
     memmove(&ctx->excitation_buf[0], &ctx->excitation_buf[AMRWB_SUBFRAME_SIZE],
             (AMRWB_P_DELAY_MAX + LP_ORDER + 1) * sizeof(float));
 
-    memmove(&ctx->pitch_gain[0], &ctx->pitch_gain[1], 4 * sizeof(float));
-    memmove(&ctx->fixed_gain[0], &ctx->fixed_gain[1], 4 * sizeof(float));
+    memmove(&ctx->pitch_gain[1], &ctx->pitch_gain[0], 5 * sizeof(float));
+    memmove(&ctx->fixed_gain[1], &ctx->fixed_gain[0], 1 * sizeof(float));
 
     memmove(&ctx->samples_az[0], &ctx->samples_az[AMRWB_SUBFRAME_SIZE],
             LP_ORDER * sizeof(float));
@@ -1165,11 +1165,11 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                             cur_subframe->pul_il, ctx->fr_cur_mode);
 
         decode_gains(cur_subframe->vq_gain, ctx->fr_cur_mode,
-                     &fixed_gain_factor, &ctx->pitch_gain[4]);
+                     &fixed_gain_factor, &ctx->pitch_gain[0]);
 
         pitch_sharpening(ctx, &fixed_sparse, ctx->fixed_vector);
 
-        ctx->fixed_gain[4] =
+        ctx->fixed_gain[0] =
             ff_amr_set_fixed_gain(fixed_gain_factor,
                        ff_dot_productf(ctx->fixed_vector, ctx->fixed_vector,
                                        AMRWB_SUBFRAME_SIZE)/AMRWB_SUBFRAME_SIZE,
@@ -1177,22 +1177,22 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                        ENERGY_MEAN, energy_pred_fac);
 
         /* Calculate voice factor and store tilt for next subframe */
-        voice_fac      = voice_factor(ctx->pitch_vector, ctx->pitch_gain[4],
-                                      ctx->fixed_vector, ctx->fixed_gain[4]);
+        voice_fac      = voice_factor(ctx->pitch_vector, ctx->pitch_gain[0],
+                                      ctx->fixed_vector, ctx->fixed_gain[0]);
         ctx->tilt_coef = voice_fac * 0.25 + 0.25;
 
         /* Construct current excitation */
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++) {
-            ctx->excitation[i] *= ctx->pitch_gain[4];
+            ctx->excitation[i] *= ctx->pitch_gain[0];
             // XXX: Did not used ff_set_fixed_vector like AMR-NB in order
             // to retain pitch sharpening done to the fixed_vector
-            ctx->excitation[i] += ctx->fixed_gain[4] * ctx->fixed_vector[i];
+            ctx->excitation[i] += ctx->fixed_gain[0] * ctx->fixed_vector[i];
             // XXX: Should remove fractional part of excitation like NB?
             // I did not found a reference of this in the ref decoder
         }
 
         /* Post-processing of excitation elements */
-        synth_fixed_gain = noise_enhancer(ctx->fixed_gain[4], &ctx->prev_tr_gain,
+        synth_fixed_gain = noise_enhancer(ctx->fixed_gain[0], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
 
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
