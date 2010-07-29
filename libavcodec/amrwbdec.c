@@ -427,15 +427,15 @@ static void decode_pitch_vector(AMRWBContext *ctx,
                               &ctx->base_pitch_lag, subframe);
 
     ctx->pitch_lag_int = pitch_lag_int + (pitch_lag_frac < 0 ? -1 : 0);
-    pitch_lag_int     += pitch_lag_frac > 0;
+    pitch_lag_int      = ctx->pitch_lag_int + (pitch_lag_frac ? 1 : 0);
 
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
     /* XXX: Not tested yet, need to ensure correct excitation construction before */
     ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int,
                           ac_inter, 4,
-                          pitch_lag_frac + 4 - 4*(pitch_lag_frac > 0),
-                          LP_ORDER, AMRWB_SUBFRAME_SIZE);
+                          pitch_lag_frac + (pitch_lag_frac > 0 ? 0 : 4),
+                          LP_ORDER, AMRWB_SUBFRAME_SIZE + 1);
 
     /* Check which pitch signal path should be used.
      * 6k60 and 8k85 modes have the ltp flag set to 0 */
@@ -444,6 +444,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
     } else {
         for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
             ctx->pitch_vector[i] = 0.18 * exc[i - 1] + 0.64 * exc[i] + 0.18 * exc[i + 1];
+        memcpy(exc, ctx->pitch_vector, AMRWB_SUBFRAME_SIZE * sizeof(float));
     }
 }
 
@@ -1100,6 +1101,8 @@ static void update_sub_state(AMRWBContext *ctx)
             LP_ORDER * sizeof(float));
     memmove(&ctx->samples_up[0], &ctx->samples_up[AMRWB_SUBFRAME_SIZE],
             UPS_MEM_SIZE * sizeof(float));
+
+    memset(ctx->fixed_vector, 0, AMRWB_SUBFRAME_SIZE * sizeof(float));
 }
 
 static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
@@ -1226,8 +1229,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         scaled_hb_excitation(ctx, hb_exc, synth_exc, hb_gain);
 
         /* Update buffers and history */
-        ff_clear_fixed_vector(ctx->fixed_vector, &fixed_sparse,
-                              AMRWB_SUBFRAME_SIZE);
         update_sub_state(ctx);
     }
 
