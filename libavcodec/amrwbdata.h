@@ -28,8 +28,7 @@
 #define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
 #define UPS_FIR_SIZE          12               ///< upsampling filter size
 #define UPS_MEM_SIZE          2 * UPS_FIR_SIZE
-//#define SAMPLE_MEM            24               ///< number of stored past samples given by
-                                               ///< max(LP_ORDER, UPS_FIR_SIZE * 2)
+
 #define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
@@ -39,7 +38,6 @@
 #define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe at 12.8 kHz
 #define AMRWB_SFR_SIZE_OUT    80               ///< samples per subframe at 16 kHz
 #define AMRWB_SAMPLE_BOUND    32768.0          ///< threshold for synthesis overflow
-
 #define AMRWB_P_DELAY_MAX     231              ///< maximum pitch delay value
 #define AMRWB_P_DELAY_MIN     34
 
