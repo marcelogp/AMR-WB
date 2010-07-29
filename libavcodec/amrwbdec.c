@@ -1033,7 +1033,7 @@ static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
 
     /* Generate a white-noise excitation */
     for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
-        hb_exc[i] = 32768.0 - (uint16_t) av_lfg_get(&ctx->prng) / 65536.0;
+        hb_exc[i] = 32768.0 - (uint16_t) av_lfg_get(&ctx->prng);
 
     ff_scale_vector_to_given_sum_of_squares(hb_exc, hb_exc, energy,
                                             AMRWB_SUBFRAME_SIZE);
@@ -1042,6 +1042,9 @@ static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
         hb_exc[i] *= hb_gain;
 }
 
+/**
+ * Calculate auto-correlation for the ISF difference vector
+ */
 static float auto_correlation(float *diff_isf, float mean, int lag)
 {
     int i;
@@ -1054,10 +1057,19 @@ static float auto_correlation(float *diff_isf, float mean, int lag)
     return sum;
 }
 
+/**
+ * Extrapolate a ISF vector to the 16kHz range (20th order LP)
+ * used at mode 6k60 LP filter for the high-freq band
+ *
+ * @param out                [out] buffer for extrapolated isf
+ * @param isf                [in] input isf vector
+ */
 static void extrapolate_isf(float *out, float *isf)
 {
     float diff_isf[LP_ORDER - 2], diff_mean;
+    float *diff_hi = diff_isf - LP_ORDER + 1; // diff array for extrapolated indices
     float corr_lag[3];
+    float est, scale;
     int i, i_max_corr;
 
     memcpy(out, isf, LP_ORDER - 1);
@@ -1083,7 +1095,32 @@ static void extrapolate_isf(float *out, float *isf)
     for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
         out[i] = isf[i - 1] + isf[i - 1 - i_max_corr]
                             - isf[i - 2 - i_max_corr];
-    return;
+
+    /* Calculate an estimate for ISF(18) and scale ISF based on the error */
+    est   = 79.65 + (out[2] - out[3] - out[4]) / 6.0;
+    scale = (FFMIN(est, 76.0) - out[LP_ORDER - 2]) /
+            (out[LP_ORDER_16k - 2] - out[LP_ORDER - 2]);
+    // XXX: should divide numerator by 2.0?
+
+    for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
+        diff_hi[i] = scale * (out[i] - out[i - 1]);
+
+    /* Stability insurance */
+    for (i = LP_ORDER; i < LP_ORDER_16k - 1; i++)
+        if (diff_hi[i] + diff_hi[i - 1] < 5.0) {
+            if (diff_hi[i] > diff_hi[i - 1]) {
+                diff_hi[i - 1] = 5.0 - diff_hi[i];
+            } else
+                diff_hi[i] = 5.0 - diff_hi[i - 1];
+        }
+
+    for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
+        out[i] = out[i - 1] + diff_hi[i];
+
+    /* XXX: Don't know why this 26214 coefficient, maybe it is not Q8 */
+    /* Scale the ISF vector for 16000 Hz */
+    for (i = 0; i < LP_ORDER_16k - 1; i++)
+        out[i] *= 26214 / (float) (1 << 8);
 }
 
 /**
