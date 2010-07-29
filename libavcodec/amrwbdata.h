@@ -1621,6 +1621,9 @@ static const int16_t isf_init[LP_ORDER] = {
   9216, 10240, 11264, 12288, 13312, 14336, 15360, 3840
 };
 
+/* ISF/ISP interpolation coefficients for each subframe */
+static const float isfp_inter[4] = { 0.45, 0.8, 0.96, 1.0 };
+
 /* Coefficients for FIR interpolation of excitation vector
  * at pitch lag resulting the adaptive codebook vector */
 static const float ac_inter[65] = {

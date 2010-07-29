@@ -74,6 +74,7 @@ typedef struct {
 
     float samples_az[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< lower band samples from synthesis at 12.8kHz
     float samples_up[UPS_MEM_SIZE + AMRWB_SUBFRAME_SIZE]; ///< lower band samples processed for upsampling at 12.8kHz
+    float samples_hb[LP_ORDER_16k + AMRWB_SFR_SIZE_OUT]; ///< higher band samples from synthesis at 16kHz
 
     float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
@@ -298,17 +299,14 @@ static void isf_set_min_dist(float *isf, float min_spacing, int size) {
  */
 static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
 {
-    int i;
+    int i, k;
     // XXX: Did not use ff_weighted_vector_sumf because using double
 
-    for (i = 0; i < LP_ORDER; i++)
-        isp_q[0][i] = 0.55 * isp4_past[i] + 0.45 * isp_q[3][i];
-
-    for (i = 0; i < LP_ORDER; i++)
-        isp_q[1][i] = 0.20 * isp4_past[i] + 0.80 * isp_q[3][i];
-
-    for (i = 0; i < LP_ORDER; i++)
-        isp_q[2][i] = 0.04 * isp4_past[i] + 0.96 * isp_q[3][i];
+    for (k = 0; k < 3; k++) {
+        float c = isfp_inter[k];
+        for (i = 0; i < LP_ORDER; i++)
+            isp_q[k][i] = (1.0 - c) * isp4_past[i] + c * isp_q[3][i];
+    }
 }
 
 /**
@@ -880,7 +878,7 @@ static void pitch_enhancer(float *fixed_vector, float voice_fac)
  * @param excitation          [out] buffer for synthesis final excitation
  * @param fixed_gain          [in] fixed codebook gain for synthesis
  * @param fixed_vector        [in] algebraic codebook vector
- * @param samples             [out] pointer to the output speech samples
+ * @param samples             [in/out] pointer to the output speech samples
  */
 static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                      float fixed_gain, const float *fixed_vector,
@@ -985,8 +983,6 @@ static void upsample_5_4(float *out, const float *in, int o_size)
         } else
             out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
                                      UPS_MEM_SIZE);
-
-        out[i] *= 2.0 / 32768.0; // upscale output
     }
 }
 
@@ -1064,7 +1060,7 @@ static float auto_correlation(float *diff_isf, float mean, int lag)
  * @param out                [out] buffer for extrapolated isf
  * @param isf                [in] input isf vector
  */
-static void extrapolate_isf(float *out, float *isf)
+static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
 {
     float diff_isf[LP_ORDER - 2], diff_mean;
     float *diff_hi = diff_isf - LP_ORDER + 1; // diff array for extrapolated indices
@@ -1124,6 +1120,63 @@ static void extrapolate_isf(float *out, float *isf)
 }
 
 /**
+ * Spectral expand the LP coefficients using the equation:
+ *   y[i] = x[i] * (gamma ** i)
+ *
+ * @param out                 [out] output buffer (may use input array)
+ * @param lpc                 [in] LP coefficients array
+ * @param gamma               [in] weighting factor
+ * @param size                [in] LP array size
+ */
+static void lpc_weighting(float *out, const float *lpc, float gamma, int size)
+{
+    int i;
+    float fac = 1.0;
+
+    for (i = 0; i < size; i++) {
+        out[i] = lpc[i] * fac;
+        fac *= gamma;
+    }
+}
+
+/**
+ * Conduct 20th order linear predictive coding synthesis for the high
+ * frequency band excitation at 16kHz
+ *
+ * @param ctx                 [in] the context
+ * @param subframe            [in] current subframe index (0 to 3)
+ * @param samples             [in/out] pointer to the output speech samples
+ * @param exc                 [in] generated white-noise scaled excitation
+ * @param isf                 [in] current frame isf vector
+ * @param isf_past            [in] past frame final isf vector
+ */
+static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
+                         const float *exc, const float *isf, const float *isf_past)
+{
+    float hb_lpc[LP_ORDER_16k + 1];
+    enum Mode mode = ctx->fr_cur_mode;
+
+    if (mode == MODE_6k60) {
+        float e_isf[LP_ORDER_16k]; // ISF vector for extrapolation
+        double e_isp[LP_ORDER_16k];
+
+        ff_weighted_vector_sumf(e_isf, isf_past, isf, isfp_inter[subframe],
+                                1.0 - isfp_inter[subframe], LP_ORDER);
+
+        extrapolate_isf(e_isf, e_isf);
+        isf2isp(e_isf, e_isp);
+        isp2lp(e_isp, hb_lpc, LP_ORDER_16k / 2);
+
+        lpc_weighting(hb_lpc, hb_lpc, 0.9, LP_ORDER_16k + 1);
+    } else {
+        lpc_weighting(hb_lpc, ctx->lp_coef[subframe], 0.6, LP_ORDER + 1);
+    }
+
+    ff_celp_lp_synthesis_filterf(samples, hb_lpc + 1, exc, AMRWB_SFR_SIZE_OUT,
+                                 (mode == MODE_6k60) ? LP_ORDER_16k : LP_ORDER);
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -1138,6 +1191,8 @@ static void update_sub_state(AMRWBContext *ctx)
             LP_ORDER * sizeof(float));
     memmove(&ctx->samples_up[0], &ctx->samples_up[AMRWB_SUBFRAME_SIZE],
             UPS_MEM_SIZE * sizeof(float));
+    memmove(&ctx->samples_hb[0], &ctx->samples_hb[AMRWB_SUBFRAME_SIZE],
+            LP_ORDER_16k * sizeof(float));
 
     memset(ctx->fixed_vector, 0, AMRWB_SUBFRAME_SIZE * sizeof(float));
 }
@@ -1193,10 +1248,11 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
 
     for (sub = 0; sub < 4; sub++)
-        isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER/2);
+        isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER / 2);
 
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
+        float *sub_buf = buf_out + sub * AMRWB_SFR_SIZE_OUT;
 
         /* Decode adaptive codebook */
         decode_pitch_vector(ctx, cur_subframe, sub);
@@ -1238,13 +1294,13 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         synth_fixed_vector = anti_sparseness(ctx, ctx->fixed_vector,
                                              spare_vector);
 
-        /* XXX: Tested against the ref code until here, it "succeeds" at least
-         * for cases in which the "opencore bug" don't interfere */
-
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
         synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
                   synth_fixed_vector, &ctx->samples_az[LP_ORDER]);
+
+        /* XXX: Tested against the ref code until here, it "succeeds" at least
+         * for cases in which the "opencore bug" don't interfere */
 
         /* Synthesis speech post-processing */
         de_emphasis(&ctx->samples_up[UPS_MEM_SIZE],
@@ -1253,8 +1309,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_31_coef,
                          ctx->hpf_31_mem, &ctx->samples_up[UPS_MEM_SIZE]);
 
-        upsample_5_4(buf_out + sub * AMRWB_SFR_SIZE_OUT,
-                     &ctx->samples_up[UPS_FIR_SIZE], AMRWB_SFR_SIZE_OUT);
+        upsample_5_4(sub_buf, &ctx->samples_up[UPS_FIR_SIZE],
+                     AMRWB_SFR_SIZE_OUT);
 
         /* High frequency band generation */
         high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_400_coef,
@@ -1264,6 +1320,18 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                                cur_subframe->hb_gain, cf->vad);
 
         scaled_hb_excitation(ctx, hb_exc, synth_exc, hb_gain);
+
+        hb_synthesis(ctx, sub, &ctx->samples_hb[LP_ORDER_16k],
+                     hb_exc, ctx->isf_cur, ctx->isf_past_final);
+
+        /* High-band post-processing filters */
+
+        /* Add low frequency and high frequency bands */
+        for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++) {
+            // XXX: the lower band should really be upscaled by 2.0?
+            sub_buf[i] = (sub_buf[i] * 2.0 +
+                          ctx->samples_hb[i + LP_ORDER_16k]) / 32768.0;
+        }
 
         /* Update buffers and history */
         update_sub_state(ctx);
