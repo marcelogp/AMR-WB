@@ -28,6 +28,7 @@
 #define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
 #define UPS_FIR_SIZE          12               ///< upsampling filter size
 #define UPS_MEM_SIZE          2 * UPS_FIR_SIZE
+#define HB_FIR_SIZE           30               ///< amount of past data needed by HB filters
 
 #define MIN_ISF_SPACING       (128 / 32768.0)  ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
@@ -1838,6 +1839,36 @@ static const float upsample_fir[4][24] = {
 static const uint16_t qua_hb_gain[16] = {
    3624, 4673, 5597, 6479, 7425, 8378, 9324, 10264,
    11210, 12206, 13391, 14844, 16770, 19655, 24289, 32728
+};
+
+/* High-band post-processing FIR filters coefficients in Q15 */
+// XXX: not sure if it is Q15 indeed (guessing)
+static const float bpf_6_7_coef[31] = { // band pass, 6kHz and 7kHz cutoffs
+    -9.765625e-04,  1.434326e-03,  9.765625e-04,
+    -8.239746e-04, -1.126099e-02,  3.424072e-02,
+    -4.336548e-02,  0.000000e+00,  1.159058e-01,
+    -2.709961e-01,  3.768616e-01, -3.352051e-01,
+     1.082764e-01,  2.369995e-01, -5.493469e-01,
+     6.749878e-01,
+    -5.493469e-01,  2.369995e-01,  1.082764e-01,
+    -3.352051e-01,  3.768616e-01, -2.709961e-01,
+     1.159058e-01,  0.000000e+00, -4.336548e-02,
+     3.424072e-02, -1.126099e-02, -8.239746e-04,
+     9.765625e-04,  1.434326e-03, -9.765625e-04
+};
+
+static const float lpf_7_coef[31] = { // low pass, 7kHz cutoff
+    -6.408691e-04,  1.434326e-03, -2.716064e-03,
+     4.455566e-03, -6.195068e-03,  6.988525e-03,
+    -5.401611e-03,  0.000000e+00,  1.022339e-02,
+    -2.560425e-02,  4.531860e-02, -6.747437e-02,
+     8.944702e-02, -1.080933e-01,  1.206360e-01,
+     8.753052e-01,
+     1.206360e-01, -1.080933e-01,  8.944702e-02,
+    -6.747437e-02,  4.531860e-02, -2.560425e-02,
+     1.022339e-02,  0.000000e+00, -5.401611e-03,
+     6.988525e-03, -6.195068e-03,  4.455566e-03,
+    -2.716064e-03,  1.434326e-03, -6.408691e-04
 };
 
 /* Core frame sizes in each mode */
