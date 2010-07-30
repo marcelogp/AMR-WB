@@ -73,11 +73,13 @@ typedef struct {
     float                           prev_tr_gain; ///< previous initial gain used by noise enhancer for thresold
 
     float samples_az[LP_ORDER + AMRWB_SUBFRAME_SIZE]; ///< lower band samples from synthesis at 12.8kHz
-    float samples_up[UPS_MEM_SIZE + AMRWB_SUBFRAME_SIZE]; ///< lower band samples processed for upsampling at 12.8kHz
+    float samples_up[UPS_MEM_SIZE + AMRWB_SUBFRAME_SIZE]; ///< lower band samples processed for upsampling
     float samples_hb[LP_ORDER_16k + AMRWB_SFR_SIZE_OUT]; ///< higher band samples from synthesis at 16kHz
 
-    float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high-pass filters
+    float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high pass filters
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
+    float               bpf_6_7_mem[HB_FIR_SIZE]; ///< previous values in the high-band band pass filter
+    float                 lpf_7_mem[HB_FIR_SIZE]; ///< previous values in the high-band low pass filter
 
     AVLFG                                   prng; ///< random number generator for white noise excitation
     uint8_t                          first_frame; ///< flag active during decoding of the first frame
@@ -1176,6 +1178,39 @@ static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
 }
 
 /**
+ * Apply to high-band samples a 15th order filter
+ * The filter characteristic depends on the given coefficients
+ *
+ * @param out                 [out] buffer for filtered output
+ * @param fir_coef            [in] filter coefficients
+ * @param mem                 [in/out] state from last filtering (updated)
+ * @param cp_gain             [in] compensation gain (usually the filter gain)
+ * @param in                  [in] input speech data (high-band)
+ *
+ * @remark It is safe to pass the same array in in and out parameters.
+ */
+static void hb_fir_filter(float *out, const float fir_coef[HB_FIR_SIZE + 1],
+                          float mem[HB_FIR_SIZE], float cp_gain, const float *in)
+{
+    int i, j;
+    float data[AMRWB_SFR_SIZE_OUT + HB_FIR_SIZE]; // past and current samples
+
+    memcpy(data, mem, HB_FIR_SIZE * sizeof(float));
+
+    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
+        data[i + HB_FIR_SIZE] = in[i] / cp_gain;
+
+    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
+    {
+        out[i] = 0.0;
+        for (j = 0; j <= HB_FIR_SIZE; j++)
+            out[i] += data[i + j] * fir_coef[j];
+    }
+
+    memcpy(mem, data + AMRWB_SFR_SIZE_OUT, HB_FIR_SIZE * sizeof(float));
+}
+
+/**
  * Update context state before the next subframe
  */
 static void update_sub_state(AMRWBContext *ctx)
@@ -1212,6 +1247,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float voice_fac, stab_fac;               // parameters used for gain smoothing
     float synth_exc[AMRWB_SUBFRAME_SIZE];    // post-processed excitation for synthesis
     float hb_exc[AMRWB_SFR_SIZE_OUT];        // excitation for the high frequency band
+    float hb_samples[AMRWB_SFR_SIZE_OUT];    // filtered high-band samples from synthesis
     float hb_gain;
     int sub, i;
 
@@ -1324,12 +1360,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                      hb_exc, ctx->isf_cur, ctx->isf_past_final);
 
         /* High-band post-processing filters */
+        hb_fir_filter(hb_samples, bpf_6_7_coef, ctx->bpf_6_7_mem,
+                      4.0, &ctx->samples_hb[LP_ORDER_16k]);
+
+        if (ctx->fr_cur_mode == MODE_23k85)
+            hb_fir_filter(hb_samples, lpf_7_coef, ctx->lpf_7_mem,
+                          1.0, hb_samples);
 
         /* Add low frequency and high frequency bands */
         for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++) {
             // XXX: the lower band should really be upscaled by 2.0?
-            sub_buf[i] = (sub_buf[i] * 2.0 +
-                          ctx->samples_hb[i + LP_ORDER_16k]) / 32768.0;
+            sub_buf[i] = (sub_buf[i] * 2.0 + hb_samples[i]) / 32768.0;
         }
 
         /* Update buffers and history */
