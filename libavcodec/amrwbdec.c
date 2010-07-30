@@ -931,11 +931,10 @@ static void de_emphasis(float *out, float *in, float m, float mem[1])
 
 /**
  * Apply to synthesis a 2nd order high-pass filter
- * with cutoff frequency at 31 Hz
  *
  * @param out                 [out] buffer for filtered output
  * @param hpf_coef            [in] filter coefficients as used below
- * @param mem                 [in] state from last filtering
+ * @param mem                 [in/out] state from last filtering (updated)
  * @param in                  [in] input speech data
  *
  * @remark It is safe to pass the same array in in and out parameters.
@@ -1028,13 +1027,13 @@ static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
     float energy = ff_dot_productf(synth_exc, synth_exc, AMRWB_SUBFRAME_SIZE);
 
     /* Generate a white-noise excitation */
-    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
         hb_exc[i] = 32768.0 - (uint16_t) av_lfg_get(&ctx->prng);
 
     ff_scale_vector_to_given_sum_of_squares(hb_exc, hb_exc, energy,
-                                            AMRWB_SUBFRAME_SIZE);
+                                            AMRWB_SFR_SIZE_OUT);
 
-    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
         hb_exc[i] *= hb_gain;
 }
 
@@ -1212,7 +1211,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float synth_fixed_gain;                  // the fixed gain that synthesis should use
     float voice_fac, stab_fac;               // parameters used for gain smoothing
     float synth_exc[AMRWB_SUBFRAME_SIZE];    // post-processed excitation for synthesis
-    float hb_exc[AMRWB_SUBFRAME_SIZE];       // excitation for the high frequency band
+    float hb_exc[AMRWB_SFR_SIZE_OUT];        // excitation for the high frequency band
     float hb_gain;
     int sub, i;
 
