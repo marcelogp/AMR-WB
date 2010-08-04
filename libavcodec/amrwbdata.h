@@ -667,7 +667,7 @@ static const uint16_t order_MODE_23k85[] = {
      0
 };
 
-/* Reordering array addresses for each mode */
+/** Reordering array addresses for each mode */
 static const uint16_t* amr_bit_orderings_by_mode[] = {
     order_MODE_6k60,
     order_MODE_8k85,
@@ -680,10 +680,10 @@ static const uint16_t* amr_bit_orderings_by_mode[] = {
     order_MODE_23k85
 };
 
-//Extracted from 3GPP TS 26.173 V9.0.0 (qpisf_2s.tab)
-//Indexed tables for retrieval of quantized ISF vectors
-//The *_36b tables are used in 6k60 mode
-//Stored in fixed-point to save some space
+// Extracted from 3GPP TS 26.173 V9.0.0 (qpisf_2s.tab)
+/** Indexed tables for retrieval of quantized ISF vectors */
+// The *_36b tables are used in 6k60 mode
+// Stored in fixed-point to save some space
 static const int16_t dico1_isf[256][9] = {
  {  579,  1081,  1035,   390,     3,  -263,  -198,   -82,    38},
  {   18,   -68,   -12,   313,   761,   405,   249,   111,   -76},
@@ -1610,22 +1610,22 @@ static const int16_t dico23_isf_36b[64][7] = {
  {   140,    -4,   -37,   254,   -62,    92,  -109}
 };
 
-/* Means of ISF vectors */
+/** Means of ISF vectors */
 static const int16_t isf_mean[LP_ORDER] = {
    738,  1326,  2336,  3578,  4596,  5662,  6711,  7730,
   8750,  9753, 10705, 11728, 12833, 13971, 15043,  4037
 };
 
-/* Initialization tables for the processed ISF vector */
+/** Initialization tables for the processed ISF vector */
 static const int16_t isf_init[LP_ORDER] = {
   1024,  2048,  3072,  4096,  5120,  6144,  7168, 8192,
   9216, 10240, 11264, 12288, 13312, 14336, 15360, 3840
 };
 
-/* ISF/ISP interpolation coefficients for each subframe */
+/** ISF/ISP interpolation coefficients for each subframe */
 static const float isfp_inter[4] = { 0.45, 0.8, 0.96, 1.0 };
 
-/* Coefficients for FIR interpolation of excitation vector
+/** Coefficients for FIR interpolation of excitation vector
  * at pitch lag resulting the adaptive codebook vector */
 static const float ac_inter[65] = {
      9.400024e-01,
@@ -1647,14 +1647,14 @@ static const float ac_inter[65] = {
      1.220703e-04,  6.103516e-05,  0.000000e+00,  0.000000e+00
 };
 
-/* [i][j] is the number of pulses present in track j at mode i */
+/** [i][j] is the number of pulses present in track j at mode i */
 static const int pulses_nb_per_mode_tr[][4] = {
     {1, 1, 0, 0}, {1, 1, 1, 1}, {2, 2, 2, 2},
     {3, 3, 2, 2}, {3, 3, 3, 3}, {4, 4, 4, 4},
     {5, 5, 4, 4}, {6, 6, 6, 6}, {6, 6, 6, 6}
 };
 
-/* Tables for decoding quantized gains {pitch, fixed factor} */
+/** Tables for decoding quantized gains {pitch, fixed factor} */
 static const int16_t qua_gain_6b[64][2] = {
     {  1566,  1332},    {  1577,  3557},
     {  3071,  6490},    {  4193, 10163},
@@ -1757,7 +1757,7 @@ static const int16_t qua_gain_7b[128][2] = {
     { 20040,  2841},    { 21234, 19833}
 };
 
-/* 4-tap moving average prediction coefficients in reverse order */
+/** 4-tap moving average prediction coefficients in reverse order */
 static const float energy_pred_fac[4] = { 0.2, 0.3, 0.4, 0.5 };
 
 /** impulse response filter tables converted to float from Q15
@@ -1794,7 +1794,7 @@ static const float *ir_filters_lookup[2] = {
     ir_filter_str, ir_filter_mid
 };
 
-/* High-pass filters coefficients for inputs and outputs (feedback) */
+/** High-pass filters coefficients for inputs and outputs (feedback) */
 
 static const float hpf_31_coef[2][3] = {        //  31 kHz cutoff filter
     { 0.989501953, -1.979003906, 0.989501953 },
@@ -1806,7 +1806,7 @@ static const float hpf_400_coef[2][3] = {       // 400 kHz cutoff filter
     { 1.787109375, -0.864257812, 0           }
 };
 
-/* Interpolation coefficients for 5/4 signal upsampling
+/** Interpolation coefficients for 5/4 signal upsampling
  * Table from the reference source was reordered for efficiency */
 static const float upsample_fir[4][24] = {
     { -6.103516e-05,  7.324219e-04, -2.014160e-03,  4.150391e-03,
@@ -1835,13 +1835,13 @@ static const float upsample_fir[4][24] = {
        4.150391e-03, -2.014160e-03,  7.324219e-04, -6.103516e-05  }
 };
 
-/* High band quantized gains for 23k85 in Q14 */
+/** High band quantized gains for 23k85 in Q14 */
 static const uint16_t qua_hb_gain[16] = {
    3624, 4673, 5597, 6479, 7425, 8378, 9324, 10264,
    11210, 12206, 13391, 14844, 16770, 19655, 24289, 32728
 };
 
-/* High-band post-processing FIR filters coefficients in Q15 */
+/** High-band post-processing FIR filters coefficients in Q15 */
 // XXX: not sure if it is Q15 indeed (guessing)
 static const float bpf_6_7_coef[31] = { // band pass, 6kHz and 7kHz cutoffs
     -9.765625e-04,  1.434326e-03,  9.765625e-04,
@@ -1871,13 +1871,13 @@ static const float lpf_7_coef[31] = { // low pass, 7kHz cutoff
     -2.716064e-03,  1.434326e-03, -6.408691e-04
 };
 
-/* Core frame sizes in each mode */
+/** Core frame sizes in each mode */
 static const uint16_t cf_sizes_wb[] = {
     132, 177, 253, 285, 317, 365, 397, 461, 477,
     40 /// SID/comfort noise frame
 };
 
-/* Sizes of speech frames bit classes */
+/** Sizes of speech frames bit classes */
 static const uint16_t cf_classA_size[] = {
     54, 64, 72, 72, 72, 72, 72, 72, 72
 };
