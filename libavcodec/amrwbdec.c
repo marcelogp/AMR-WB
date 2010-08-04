@@ -329,6 +329,13 @@ static void isp2lp(const double *isp, float *lp, int lp_half_order) {
     ff_lsp2polyf(isp,     pa, lp_half_order);
     ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
 
+    if (lp_half_order > 8) { // high-band specific
+        for (i = 0; i <= lp_half_order; i++)
+            pa[i] *= 4.0;
+        for (i = 0; i < lp_half_order; i++)
+            qa[i] *= 4.0;
+    }
+
     for (i = 1; i < lp_half_order; i++) {
         double paf = (1 + last_isp) * pa[i];
         double qaf = (1 - last_isp) * (qa[i] - qa_old);
@@ -434,13 +441,13 @@ static void decode_pitch_vector(AMRWBContext *ctx,
         decode_pitch_lag_high(&pitch_lag_int, &pitch_lag_frac, amr_subframe->adap,
                               &ctx->base_pitch_lag, subframe);
 
-    ctx->pitch_lag_int = pitch_lag_int + (pitch_lag_frac < 0 ? -1 : 0);
-    pitch_lag_int      = ctx->pitch_lag_int + (pitch_lag_frac ? 1 : 0);
+    ctx->pitch_lag_int = pitch_lag_int;
+    pitch_lag_int     += (pitch_lag_frac < 0 ? -1 : 0) + (pitch_lag_frac ? 1 : 0);
 
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function. */
     /* XXX: Not tested yet, need to ensure correct excitation construction before */
-    ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int,
+    ff_acelp_interpolatef(exc, exc + 1 - pitch_lag_int, // XXX: check state updates
                           ac_inter, 4,
                           pitch_lag_frac + (pitch_lag_frac > 0 ? 0 : 4),
                           LP_ORDER, AMRWB_SUBFRAME_SIZE + 1);
@@ -691,16 +698,32 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
 static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
                              float *fixed_vector)
 {
-    /* Periodicity enhancement part */
+    int i;
+
+    /* XXX: Now uses the same filtering order as the ref code
+    // Periodicity enhancement part
     fixed_sparse->pitch_lag = ctx->pitch_lag_int;
     fixed_sparse->pitch_fac = 0.85;
 
     ff_set_fixed_vector(fixed_vector, fixed_sparse, 1.0,
                         AMRWB_SUBFRAME_SIZE);
 
-    /* Tilt part */
-    ff_weighted_vector_sumf(fixed_vector + 1, fixed_vector + 1, fixed_vector,
-                            1.0, - ctx->tilt_coef, AMRWB_SUBFRAME_SIZE - 1);
+    // Tilt part
+    for (i = AMRWB_SUBFRAME_SIZE - 1; i != 0; i--)
+        fixed_vector[i] -= fixed_vector[i - 1] * ctx->tilt_coef;
+    */
+
+    fixed_sparse->pitch_lag = AMRWB_SUBFRAME_SIZE;
+    ff_set_fixed_vector(fixed_vector, fixed_sparse, 1.0,
+                        AMRWB_SUBFRAME_SIZE);
+
+    // Tilt part
+    for (i = AMRWB_SUBFRAME_SIZE - 1; i != 0; i--)
+        fixed_vector[i] -= fixed_vector[i - 1] * ctx->tilt_coef;
+
+    // Periodicity enhancement part
+    for (i = ctx->pitch_lag_int; i < AMRWB_SUBFRAME_SIZE; i++)
+        fixed_vector[i] += fixed_vector[i - ctx->pitch_lag_int] * 0.85;
 }
 
 /**
@@ -710,6 +733,8 @@ static void pitch_sharpening(AMRWBContext *ctx, AMRFixed *fixed_sparse,
  * @param[in] p_gain, f_gain       Pitch and fixed gains
  */
 // XXX: Function extracted from voice_factor() in reference code
+// XXX: There is something wrong with the precision here! The magnitudes
+// of the energies are not correct. Please check the reference code carefully
 static float voice_factor(float *p_vector, float p_gain,
                           float *f_vector, float f_gain)
 {
@@ -937,6 +962,9 @@ static void de_emphasis(float *out, float *in, float m, float mem[1])
          out[i] = in[i] + out[i - 1] * m;
 
     mem[0] = out[AMRWB_SUBFRAME_SIZE - 1];
+
+    for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+        out[i] = rintf(out[i]);
 }
 
 /**
@@ -1208,8 +1236,7 @@ static void hb_fir_filter(float *out, const float fir_coef[HB_FIR_SIZE + 1],
     for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
         data[i + HB_FIR_SIZE] = in[i] / cp_gain;
 
-    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++)
-    {
+    for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++) {
         out[i] = 0.0;
         for (j = 0; j <= HB_FIR_SIZE; j++)
             out[i] += data[i + j] * fir_coef[j];
@@ -1233,7 +1260,7 @@ static void update_sub_state(AMRWBContext *ctx)
             LP_ORDER * sizeof(float));
     memmove(&ctx->samples_up[0], &ctx->samples_up[AMRWB_SUBFRAME_SIZE],
             UPS_MEM_SIZE * sizeof(float));
-    memmove(&ctx->samples_hb[0], &ctx->samples_hb[AMRWB_SUBFRAME_SIZE],
+    memmove(&ctx->samples_hb[0], &ctx->samples_hb[AMRWB_SFR_SIZE_OUT],
             LP_ORDER_16k * sizeof(float));
 
     memset(ctx->fixed_vector, 0, AMRWB_SUBFRAME_SIZE * sizeof(float));
@@ -1330,6 +1357,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
             // I did not found a reference of this in the ref decoder
         }
 
+        /* for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            ctx->excitation[i] = truncf(ctx->excitation[i]); */
+
         /* Post-processing of excitation elements */
         synth_fixed_gain = noise_enhancer(ctx->fixed_gain[0], &ctx->prev_tr_gain,
                                           voice_fac, stab_fac);
@@ -1339,6 +1369,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         pitch_enhancer(synth_fixed_vector, voice_fac);
 
+        /* XXX: In testings, the gain values seem stable, so do the LPC */
         synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
                   synth_fixed_vector, &ctx->samples_az[LP_ORDER]);
 
@@ -1404,4 +1435,5 @@ AVCodec amrwb_decoder =
     .init           = amrwb_decode_init,
     .decode         = amrwb_decode_frame,
     .long_name      = NULL_IF_CONFIG_SMALL("Adaptive Multi-Rate WideBand"),
+    .sample_fmts    = (enum SampleFormat[]){SAMPLE_FMT_FLT,SAMPLE_FMT_NONE},
 };
