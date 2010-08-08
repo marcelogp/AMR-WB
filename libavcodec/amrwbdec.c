@@ -749,11 +749,11 @@ static float voice_factor(float *p_vector, float p_gain,
 /**
  * Reduce fixed vector sparseness by smoothing with one of three IR filters.
  * Also known as "adaptive phase dispersion".
- * Returns the filtered fixed vector address
+ * Returns the overwritten filtered fixed vector address
  *
  * @param[in] ctx                  The context
- * @param[in] fixed_vector         Unfiltered fixed vector
- * @param[in] out                  Space for modified vector if necessary
+ * @param[in,out] fixed_vector     Unfiltered fixed vector
+ * @param[out] out                 Space for modified vector if necessary
  */
 static float *anti_sparseness(AMRWBContext *ctx,
                               float *fixed_vector, float *out)
@@ -1016,7 +1016,7 @@ static void upsample_5_4(float *out, const float *in, int o_size)
         int frac_part = (i << 2) - 5 * int_part;
 
         if (!frac_part) {
-            out[i] = in[i];
+            out[i] = in[int_part];
         } else
             out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
                                      UPS_MEM_SIZE);
@@ -1382,6 +1382,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_31_coef,
                          ctx->hpf_31_mem, &ctx->samples_up[UPS_MEM_SIZE]);
+
+        /*for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
+            ctx->samples_up[UPS_MEM_SIZE+i] = rint(ctx->samples_up[UPS_MEM_SIZE+i]);*/
 
         upsample_5_4(sub_buf, &ctx->samples_up[UPS_FIR_SIZE],
                      AMRWB_SFR_SIZE_OUT);
