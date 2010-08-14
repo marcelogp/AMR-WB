@@ -1373,8 +1373,6 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         synthesis(ctx, ctx->lp_coef[sub], synth_exc, synth_fixed_gain,
                   synth_fixed_vector, &ctx->samples_az[LP_ORDER]);
 
-        /* XXX: Tested against the ref code until here, it "succeeds" at least
-         * for cases in which the "opencore bug" don't interfere */
 
         /* Synthesis speech post-processing */
         de_emphasis(&ctx->samples_up[UPS_MEM_SIZE],
@@ -1383,17 +1381,14 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_31_coef,
                          ctx->hpf_31_mem, &ctx->samples_up[UPS_MEM_SIZE]);
 
-        /*for (i = 0; i < AMRWB_SUBFRAME_SIZE; i++)
-            ctx->samples_up[UPS_MEM_SIZE+i] = rint(ctx->samples_up[UPS_MEM_SIZE+i]);*/
-
         upsample_5_4(sub_buf, &ctx->samples_up[UPS_FIR_SIZE],
                      AMRWB_SFR_SIZE_OUT);
 
-        /* High frequency band generation */
-        high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_400_coef,
-                         ctx->hpf_400_mem, &ctx->samples_up[UPS_MEM_SIZE]);
+        /* High frequency band generation part */
+        high_pass_filter(hb_samples, hpf_400_coef, ctx->hpf_400_mem,
+                         &ctx->samples_up[UPS_MEM_SIZE]);
 
-        hb_gain = find_hb_gain(ctx, &ctx->samples_up[UPS_MEM_SIZE],
+        hb_gain = find_hb_gain(ctx, hb_samples,
                                cur_subframe->hb_gain, cf->vad);
 
         scaled_hb_excitation(ctx, hb_exc, synth_exc, hb_gain);
@@ -1412,7 +1407,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         /* Add low frequency and high frequency bands */
         for (i = 0; i < AMRWB_SFR_SIZE_OUT; i++) {
             // XXX: the lower band should really be upscaled by 2.0?
-            sub_buf[i] = (sub_buf[i] * 2.0 + hb_samples[i]) / 32768.0;
+            sub_buf[i] = (sub_buf[i] * 1.0 + hb_samples[i]) / 32768.0;
         }
 
         /* Update buffers and history */
