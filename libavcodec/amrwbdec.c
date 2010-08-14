@@ -175,15 +175,16 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
  *
  * @param[in] isf                  isf vector
  * @param[out] isp                 output isp vector
+ * @param[in] size                 isf/isp size
  */
-static void isf2isp(const float *isf, double *isp)
+static void isf2isp(const float *isf, double *isp, int size)
 {
     int i;
 
-    for (i = 0; i < LP_ORDER - 1; i++)
+    for (i = 0; i < size - 1; i++)
         isp[i] = cos(2.0 * M_PI * isf[i]);
 
-    isp[LP_ORDER - 1] = cos(4.0 * M_PI * isf[LP_ORDER - 1]);
+    isp[size - 1] = cos(4.0 * M_PI * isf[size - 1]);
 }
 
 /**
@@ -1201,7 +1202,7 @@ static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
                                 1.0 - isfp_inter[subframe], LP_ORDER);
 
         extrapolate_isf(e_isf, e_isf);
-        isf2isp(e_isf, e_isp);
+        isf2isp(e_isf, e_isp, LP_ORDER_16k);
         isp2lp(e_isp, hb_lpc, LP_ORDER_16k / 2);
 
         lpc_weighting(hb_lpc, hb_lpc, 0.9, LP_ORDER_16k + 1);
@@ -1309,7 +1310,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     stab_fac = stability_factor(ctx->isf_cur, ctx->isf_past_final);
 
-    isf2isp(ctx->isf_cur, ctx->isp[3]);
+    isf2isp(ctx->isf_cur, ctx->isp[3], LP_ORDER);
     /* Generate a ISP vector for each subframe */
     if (ctx->first_frame) {
         ctx->first_frame = 0;
