@@ -1129,7 +1129,7 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
     float est, scale;
     int i, i_max_corr;
 
-    memcpy(out, isf, LP_ORDER - 1);
+    memcpy(out, isf, (LP_ORDER - 1) * sizeof(float));
     out[LP_ORDER_16k - 1] = isf[LP_ORDER - 1];
 
     /* Calculate the difference vector */
@@ -1154,8 +1154,8 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
                             - isf[i - 2 - i_max_corr];
 
     /* Calculate an estimate for ISF(18) and scale ISF based on the error */
-    est   = 79.65 + (out[2] - out[3] - out[4]) / 6.0;
-    scale = (FFMIN(est, 76.0) - out[LP_ORDER - 2]) /
+    est   = 7965 + (out[2] - out[3] - out[4]) / 6.0;
+    scale = 0.5 * (FFMIN(est, 7600) - out[LP_ORDER - 2]) /
             (out[LP_ORDER_16k - 2] - out[LP_ORDER - 2]);
     // XXX: should divide numerator by 2.0?
 
@@ -1172,12 +1172,11 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
         }
 
     for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
-        out[i] = out[i - 1] + diff_hi[i];
+        out[i] = out[i - 1] + diff_hi[i] / (float) (1 << 15);
 
-    /* XXX: Don't know why this 26214 coefficient, maybe it is not Q8 */
     /* Scale the ISF vector for 16000 Hz */
     for (i = 0; i < LP_ORDER_16k - 1; i++)
-        out[i] *= 26214 / (float) (1 << 8);
+        out[i] *= 0.8;
 }
 
 /**
