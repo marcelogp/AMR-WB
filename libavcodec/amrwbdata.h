@@ -27,10 +27,10 @@
 #define LP_ORDER              16               ///< linear predictive coding filter order
 #define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
 #define UPS_FIR_SIZE          12               ///< upsampling filter size
-#define UPS_MEM_SIZE          2 * UPS_FIR_SIZE
+#define UPS_MEM_SIZE          (2 * UPS_FIR_SIZE)
 #define HB_FIR_SIZE           30               ///< amount of past data needed by HB filters
 
-#define MIN_ISF_SPACING       (50 / 32768.0)   /*(128 / 32768.0)*/ ///< minimum isf gap
+#define MIN_ISF_SPACING       (50.0 / 32768.0) ///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
@@ -53,7 +53,7 @@ enum Mode {
     MODE_23k05,                            ///< 23.05 kbit/s
     MODE_23k85,                            ///< 23.85 kbit/s
     MODE_SID,                              ///< comfort noise frame
-    /*10-13:  Future use*/
+    /* 10-13:  Future use */
     SP_LOST = 14,                          ///< speech lost
     NO_DATA                                ///< no transmission
 };
@@ -680,9 +680,9 @@ static const uint16_t* amr_bit_orderings_by_mode[] = {
 };
 
 // Extracted from 3GPP TS 26.173 V9.0.0 (qpisf_2s.tab)
-/** Indexed tables for retrieval of quantized ISF vectors */
 // The *_36b tables are used in 6k60 mode
 // Stored in fixed-point to save some space
+/** Indexed tables for retrieval of quantized ISF vectors in Q15 */
 static const int16_t dico1_isf[256][9] = {
  {  579,  1081,  1035,   390,     3,  -263,  -198,   -82,    38},
  {   18,   -68,   -12,   313,   761,   405,   249,   111,   -76},
@@ -1609,13 +1609,13 @@ static const int16_t dico23_isf_36b[64][7] = {
  {   140,    -4,   -37,   254,   -62,    92,  -109}
 };
 
-/** Means of ISF vectors */
+/** Means of ISF vectors in Q15 */
 static const int16_t isf_mean[LP_ORDER] = {
    738,  1326,  2336,  3578,  4596,  5662,  6711,  7730,
   8750,  9753, 10705, 11728, 12833, 13971, 15043,  4037
 };
 
-/** Initialization tables for the processed ISF vector */
+/** Initialization tables for the processed ISF vector in Q15 */
 static const int16_t isf_init[LP_ORDER] = {
   1024,  2048,  3072,  4096,  5120,  6144,  7168, 8192,
   9216, 10240, 11264, 12288, 13312, 14336, 15360, 3840
@@ -1653,7 +1653,7 @@ static const int pulses_nb_per_mode_tr[][4] = {
     {5, 5, 4, 4}, {6, 6, 6, 6}, {6, 6, 6, 6}
 };
 
-/** Tables for decoding quantized gains {pitch, fixed factor} */
+/** Tables for decoding quantized gains { pitch (Q14), fixed factor (Q11) } */
 static const int16_t qua_gain_6b[64][2] = {
     {  1566,  1332},    {  1577,  3557},
     {  3071,  6490},    {  4193, 10163},
@@ -1762,31 +1762,41 @@ static const float energy_pred_fac[4] = { 0.2, 0.3, 0.4, 0.5 };
 /** impulse response filter tables converted to float from Q15
  * used for anti-sparseness processing */
 static const float ir_filter_str[64] = {
-     0.615906,  0.295807,  0.099792, -0.104889,  0.087402, -0.159912,
-     0.048492, -0.041412,  0.018311,  0.118805, -0.045685, -0.021301,
-     0.036713, -0.160187,  0.036591,  0.163910, -0.045410, -0.021515,
-    -0.088104,  0.060303,  0.027405,  0.022003, -0.118286,  0.128998,
-    -0.156006,  0.195312, -0.031494, -0.144196,  0.124908, -0.132812,
-     0.097809,  0.065002, -0.060913, -0.056000,  0.080811, -0.054504,
-    -0.012390,  0.017487,  0.075806, -0.110107,  0.095795, -0.041595,
-    -0.078308,  0.116211, -0.019501, -0.062592, -0.016510,  0.072510,
-     0.119995, -0.191101,  0.043701, -0.109894,  0.149200,  0.011292,
-     0.017303, -0.035492, -0.087097,  0.058411,  0.001190, -0.073792,
-     0.105408,  0.090790, -0.122711,  0.104706
+     6.159058e-01,  2.958069e-01,  9.979248e-02, -1.048889e-01,
+     8.740234e-02, -1.599121e-01,  4.849243e-02, -4.141235e-02,
+     1.831055e-02,  1.188049e-01, -4.568481e-02, -2.130127e-02,
+     3.671265e-02, -1.601868e-01,  3.659058e-02,  1.639099e-01,
+    -4.541016e-02, -2.151489e-02, -8.810425e-02,  6.030273e-02,
+     2.740479e-02,  2.200317e-02, -1.182861e-01,  1.289978e-01,
+    -1.560059e-01,  1.953125e-01, -3.149414e-02, -1.441956e-01,
+     1.249084e-01, -1.328125e-01,  9.780884e-02,  6.500244e-02,
+    -6.091309e-02, -5.599976e-02,  8.081055e-02, -5.450439e-02,
+    -1.239014e-02,  1.748657e-02,  7.580566e-02, -1.101074e-01,
+     9.579468e-02, -4.159546e-02, -7.830811e-02,  1.162109e-01,
+    -1.950073e-02, -6.259155e-02, -1.651001e-02,  7.250977e-02,
+     1.199951e-01, -1.911011e-01,  4.370117e-02, -1.098938e-01,
+     1.492004e-01,  1.129150e-02,  1.730347e-02, -3.549194e-02,
+    -8.709717e-02,  5.841064e-02,  1.190186e-03, -7.379150e-02,
+     1.054077e-01,  9.078979e-02, -1.227112e-01,  1.047058e-01
 };
 
 static const float ir_filter_mid[64] = {
-     0.735413,  0.319214, -0.160614, -0.023285,  0.062500, -0.028290,
-     0.053497, -0.101410,  0.067505,  0.019897, -0.065491,  0.075897,
-    -0.108002,  0.125397, -0.064301, -0.011414, -0.019104,  0.130310,
-    -0.167389,  0.068207,  0.056702, -0.084503,  0.022705,  0.034790,
-    -0.023285, -0.049286,  0.123901, -0.139587,  0.091003, -0.035492,
-     0.022308, -0.033508,  0.024506,  0.005096, -0.021790,  0.018494,
-    -0.017090,  0.019501,  0.001312, -0.053894,  0.098511, -0.084900,
-     0.020294,  0.023285,  0.007111, -0.061096,  0.039398,  0.057098,
-    -0.105896,  0.031494,  0.082703, -0.123291,  0.110596, -0.128601,
-     0.161499, -0.130310,  0.047699,  0.003296, -0.017700,  0.050110,
-    -0.075012,  0.029205,  0.016602,  0.077515
+     7.354126e-01,  3.192139e-01, -1.606140e-01, -2.328491e-02,
+     6.250000e-02, -2.828979e-02,  5.349731e-02, -1.014099e-01,
+     6.750488e-02,  1.989746e-02, -6.549072e-02,  7.589722e-02,
+    -1.080017e-01,  1.253967e-01, -6.430054e-02, -1.141357e-02,
+    -1.910400e-02,  1.303101e-01, -1.673889e-01,  6.820679e-02,
+     5.670166e-02, -8.450317e-02,  2.270508e-02,  3.479004e-02,
+    -2.328491e-02, -4.928589e-02,  1.239014e-01, -1.395874e-01,
+     9.100342e-02, -3.549194e-02,  2.230835e-02, -3.350830e-02,
+     2.450562e-02,  5.096436e-03, -2.178955e-02,  1.849365e-02,
+    -1.708984e-02,  1.950073e-02,  1.312256e-03, -5.389404e-02,
+     9.851074e-02, -8.489990e-02,  2.029419e-02,  2.328491e-02,
+     7.110596e-03, -6.109619e-02,  3.939819e-02,  5.709839e-02,
+    -1.058960e-01,  3.149414e-02,  8.270264e-02, -1.232910e-01,
+     1.105957e-01, -1.286011e-01,  1.614990e-01, -1.303101e-01,
+     4.769897e-02,  3.295898e-03, -1.770020e-02,  5.010986e-02,
+    -7.501221e-02,  2.920532e-02,  1.660156e-02,  7.751465e-02
 };
 
 static const float *ir_filters_lookup[2] = {
@@ -1794,7 +1804,6 @@ static const float *ir_filters_lookup[2] = {
 };
 
 /** High-pass filters coefficients for inputs and outputs (feedback) */
-
 static const float hpf_31_coef[2][3] = {        //  31 kHz cutoff filter
     { 0.989501953, -1.979003906, 0.989501953 },
     { 1.978881836, -0.979125977, 0           }
@@ -1840,8 +1849,7 @@ static const uint16_t qua_hb_gain[16] = {
    11210, 12206, 13391, 14844, 16770, 19655, 24289, 32728
 };
 
-/** High-band post-processing FIR filters coefficients in Q15 */
-// XXX: not sure if it is Q15 indeed (guessing)
+/** High-band post-processing FIR filters coefficients from Q15 */
 static const float bpf_6_7_coef[31] = { // band pass, 6kHz and 7kHz cutoffs
     -9.765625e-04,  1.434326e-03,  9.765625e-04,
     -8.239746e-04, -1.126099e-02,  3.424072e-02,
@@ -1874,15 +1882,6 @@ static const float lpf_7_coef[31] = { // low pass, 7kHz cutoff
 static const uint16_t cf_sizes_wb[] = {
     132, 177, 253, 285, 317, 365, 397, 461, 477,
     40 /// SID/comfort noise frame
-};
-
-/** Sizes of speech frames bit classes */
-static const uint16_t cf_classA_size[] = {
-    54, 64, 72, 72, 72, 72, 72, 72, 72
-};
-
-static const uint16_t cf_classB_size[] = {
-    78, 113, 181, 213, 245, 293, 325, 389, 405
 };
 
 #endif
