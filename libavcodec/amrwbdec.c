@@ -402,7 +402,7 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
             *lag_frac = 0;
         }
         /* minimum lag for next subframe */
-        *base_lag_int = av_clip(*lag_int - 8, AMRWB_P_DELAY_MIN,
+        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0 ? 1 : 0), AMRWB_P_DELAY_MIN,
                                 AMRWB_P_DELAY_MAX - 15);
         /* XXX: the spec states clearly that *base_lag_int should be
          * the nearest integer to *lag_int (minus 8), but the ref code
@@ -432,7 +432,8 @@ static void decode_pitch_lag_low(int *lag_int, int *lag_frac, int pitch_index,
             *lag_int  = pitch_index - 24;
             *lag_frac = 0;
         }
-        *base_lag_int = av_clip(*lag_int - 8, AMRWB_P_DELAY_MIN,
+        /* XXX: same problem as before */
+        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0 ? 1 : 0), AMRWB_P_DELAY_MIN,
                                 AMRWB_P_DELAY_MAX - 15);
     } else {
         *lag_int  = (pitch_index + 1) >> 1;
