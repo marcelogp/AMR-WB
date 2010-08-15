@@ -313,6 +313,26 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
 }
 
 /**
+ * 16kHz version of ff_lsp2polyf
+ */
+static void lsp2polyf_16k(const double *lsp, double *f, int lp_half_order)
+{
+    int i, j;
+
+    f[0] = 0.25;
+    f[1] = -0.5 * lsp[0];
+    lsp -= 2;
+    for(i = 2; i <= lp_half_order; i++)
+    {
+        double val = -2 * lsp[2 * i];
+        f[i] = val * f[i - 1] + 2 * f[i - 2];
+        for(j = i - 1; j > 1; j--)
+            f[j] += f[j - 1] * val + f[j - 2];
+        f[1] += 0.25 * val;
+    }
+}
+
+/**
  * Convert a ISP vector to LP coefficient domain {a_k}
  * Equations from TS 26.190 section 5.2.4
  *
@@ -321,20 +341,23 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
  * @param[in] lp_half_order        Half the number of LPs to construct
  */
 static void isp2lp(const double *isp, float *lp, int lp_half_order) {
-    double pa[MAX_LP_HALF_ORDER + 1], qa[MAX_LP_HALF_ORDER + 1];
+    double pa[10 + 1], qa[10 + 1];
     float *lp2 = lp + (lp_half_order << 1);
     double last_isp = isp[2 * lp_half_order - 1];
     double qa_old = 0.0;
     int i;
 
-    ff_lsp2polyf(isp,     pa, lp_half_order);
-    ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
-
     if (lp_half_order > 8) { // high-band specific
+        lsp2polyf_16k(isp,     pa, lp_half_order);
+        lsp2polyf_16k(isp + 1, qa, lp_half_order - 1);
+
         for (i = 0; i <= lp_half_order; i++)
             pa[i] *= 4.0;
         for (i = 0; i < lp_half_order; i++)
             qa[i] *= 4.0;
+    } else {
+        ff_lsp2polyf(isp,     pa, lp_half_order);
+        ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
     }
 
     for (i = 1; i < lp_half_order; i++) {
