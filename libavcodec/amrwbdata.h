@@ -36,12 +36,12 @@
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
 #define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
 
-#define AMRWB_SUBFRAME_SIZE   64               ///< samples per subframe at 12.8 kHz
-#define AMRWB_SFR_SIZE_OUT    80               ///< samples per subframe at 16 kHz
+#define AMRWB_SFR_SIZE        64               ///< samples per subframe at 12.8 kHz
+#define AMRWB_SFR_SIZE_16k    80               ///< samples per subframe at 16 kHz
 #define AMRWB_P_DELAY_MAX     231              ///< maximum pitch delay value
 #define AMRWB_P_DELAY_MIN     34
 
-/* Mode ordering is sensitive, do not change */
+/* Relative mode ordering is sensitive */
 enum Mode {
     MODE_6k60 = 0,                         ///< 6.60 kbit/s
     MODE_8k85,                             ///< 8.85 kbit/s
