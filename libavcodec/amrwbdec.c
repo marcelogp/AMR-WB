@@ -53,7 +53,7 @@ typedef struct {
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for the next relative subframe
     uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
 
-    float excitation_buf[AMRWB_P_DELAY_MAX + LP_ORDER + 1 + AMRWB_SFR_SIZE]; ///< current excitation and all necessary excitation history
+    float excitation_buf[AMRWB_P_DELAY_MAX + LP_ORDER + 2 + AMRWB_SFR_SIZE]; ///< current excitation and all necessary excitation history
     float                            *excitation; ///< points to current excitation in excitation_buf[]
 
     float           pitch_vector[AMRWB_SFR_SIZE]; ///< adaptive codebook (pitch) vector for current subframe
