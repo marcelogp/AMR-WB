@@ -93,10 +93,9 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 
     ctx->excitation  = &ctx->excitation_buf[AMRWB_P_DELAY_MAX + LP_ORDER + 1];
     ctx->first_frame = 1;
-    ctx->tilt_coef   = ctx->prev_tr_gain = 0.0;
 
     for (i = 0; i < LP_ORDER; i++)
-        ctx->isf_past_final[i] = isf_init[i] / (float) (1 << 15);
+        ctx->isf_past_final[i] = isf_init[i] * (1.0f / (1 << 15));
 
     for (i = 0; i < 4; i++)
         ctx->prediction_error[i] = MIN_ENERGY;
@@ -117,7 +116,6 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
                                   int buf_size)
 {
     GetBitContext gb;
-    enum Mode mode;
     uint16_t *data;
 
     init_get_bits(&gb, buf, buf_size * 8);
@@ -125,7 +123,6 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     /* decode frame header (1st octet) */
     skip_bits(&gb, 1);  // padding bit
     ctx->fr_cur_mode  = get_bits(&gb, 4);
-    mode              = ctx->fr_cur_mode;
     ctx->fr_quality   = get_bits1(&gb);
     skip_bits(&gb, 2);  // padding bits
 
@@ -137,8 +134,8 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     memset(data, 0, sizeof(AMRWBFrame));
     buf++;
 
-    if (mode < MODE_SID) { /* Normal speech frame */
-        const uint16_t *perm = amr_bit_orderings_by_mode[mode];
+    if (ctx->fr_cur_mode < MODE_SID) { /* Normal speech frame */
+        const uint16_t *perm = amr_bit_orderings_by_mode[ctx->fr_cur_mode];
         int field_size;
 
         while ((field_size = *perm++)) {
@@ -153,11 +150,8 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
             data[field_offset] = field;
         }
     }
-    else if (mode == MODE_SID) { /* Comfort noise frame */
-        /* not implemented */
-    }
 
-    return mode;
+    return ctx->fr_cur_mode;
 }
 
 /**
@@ -182,30 +176,26 @@ static void isf2isp(const float *isf, double *isp, int size)
  *
  * @param[in] ind                  Array of 5 indices
  * @param[out] isf_q               Buffer for isf_q[LP_ORDER]
- * @param[in] fr_q                 Frame quality (good frame == 1)
  *
  */
-static void decode_isf_indices_36b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
+static void decode_isf_indices_36b(uint16_t *ind, float *isf_q) {
     int i;
 
-    if (fr_q == 1) {
-        for (i = 0; i < 9; i++) {
-            isf_q[i] = dico1_isf[ind[0]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 7; i++) {
-            isf_q[i + 9] = dico2_isf[ind[1]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 5; i++) {
-            isf_q[i] += dico21_isf_36b[ind[2]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 4; i++) {
-            isf_q[i + 5] += dico22_isf_36b[ind[3]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 7; i++) {
-            isf_q[i + 9] += dico23_isf_36b[ind[4]][i] / (float) (1 << 15);
-        }
+    for (i = 0; i < 9; i++) {
+        isf_q[i] = dico1_isf[ind[0]][i] * (1.0f / (1 << 15));
     }
-    /* not implemented for bad frame */
+    for (i = 0; i < 7; i++) {
+        isf_q[i + 9] = dico2_isf[ind[1]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 5; i++) {
+        isf_q[i] += dico21_isf_36b[ind[2]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 4; i++) {
+        isf_q[i + 5] += dico22_isf_36b[ind[3]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 7; i++) {
+        isf_q[i + 9] += dico23_isf_36b[ind[4]][i] * (1.0f / (1 << 15));
+    }
 }
 
 /**
@@ -213,36 +203,32 @@ static void decode_isf_indices_36b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
  *
  * @param[in] ind                  Array of 7 indices
  * @param[out] isf_q               Buffer for isf_q[LP_ORDER]
- * @param[in] fr_q                 Frame quality (good frame == 1)
  *
  */
-static void decode_isf_indices_46b(uint16_t *ind, float *isf_q, uint8_t fr_q) {
+static void decode_isf_indices_46b(uint16_t *ind, float *isf_q) {
     int i;
 
-    if (fr_q == 1) {
-        for (i = 0; i < 9; i++) {
-            isf_q[i] = dico1_isf[ind[0]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 7; i++) {
-            isf_q[i + 9] = dico2_isf[ind[1]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 3; i++) {
-            isf_q[i] += dico21_isf[ind[2]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 3; i++) {
-            isf_q[i + 3] += dico22_isf[ind[3]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 3; i++) {
-            isf_q[i + 6] += dico23_isf[ind[4]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 3; i++) {
-            isf_q[i + 9] += dico24_isf[ind[5]][i] / (float) (1 << 15);
-        }
-        for (i = 0; i < 4; i++) {
-            isf_q[i + 12] += dico25_isf[ind[6]][i] / (float) (1 << 15);
-        }
+    for (i = 0; i < 9; i++) {
+        isf_q[i] = dico1_isf[ind[0]][i] * (1.0f / (1 << 15));
     }
-    /* not implemented for bad frame */
+    for (i = 0; i < 7; i++) {
+        isf_q[i + 9] = dico2_isf[ind[1]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 3; i++) {
+        isf_q[i] += dico21_isf[ind[2]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 3; i++) {
+        isf_q[i + 3] += dico22_isf[ind[3]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 3; i++) {
+        isf_q[i + 6] += dico23_isf[ind[4]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 3; i++) {
+        isf_q[i + 9] += dico24_isf[ind[5]][i] * (1.0f / (1 << 15));
+    }
+    for (i = 0; i < 4; i++) {
+        isf_q[i + 12] += dico25_isf[ind[6]][i] * (1.0f / (1 << 15));
+    }
 }
 
 /**
@@ -259,27 +245,9 @@ static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
 
     for (i = 0; i < LP_ORDER; i++) {
         tmp = isf_q[i];
-        isf_q[i] += isf_mean[i] / (float) (1 << 15);
+        isf_q[i] += isf_mean[i] * (1.0f / (1 << 15));
         isf_q[i] += PRED_FACTOR * isf_past[i];
         isf_past[i] = tmp;
-    }
-}
-
-/**
- * Ensures a minimum distance between adjacent ISFs
- *
- * @param[in,out] isf              ISF vector
- * @param[in] min_spacing          Minimum gap to keep
- * @param[in] size                 ISF vector size
- *
- */
-static void isf_set_min_dist(float *isf, float min_spacing, int size) {
-    int i;
-    float prev = 0.0;
-
-    for (i = 0; i < size - 1; i++) {
-        isf[i] = FFMAX(isf[i], prev + min_spacing);
-        prev = isf[i];
     }
 }
 
@@ -302,26 +270,6 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
 }
 
 /**
- * 16kHz version of ff_lsp2polyf for the high-band
- */
-static void lsp2polyf_16k(const double *lsp, double *f, int lp_half_order)
-{
-    int i, j;
-
-    f[0] = 0.25;
-    f[1] = -0.5 * lsp[0];
-    lsp -= 2;
-    for(i = 2; i <= lp_half_order; i++)
-    {
-        double val = -2 * lsp[2 * i];
-        f[i] = val * f[i - 1] + 2 * f[i - 2];
-        for(j = i - 1; j > 1; j--)
-            f[j] += f[j - 1] * val + f[j - 2];
-        f[1] += 0.25 * val;
-    }
-}
-
-/**
  * Convert a ISP vector to LP coefficient domain {a_k}
  * Equations from TS 26.190 section 5.2.4
  *
@@ -336,18 +284,8 @@ static void isp2lp(const double *isp, float *lp, int lp_half_order) {
     float *lp2 = &lp[2 * lp_half_order];
     int i;
 
-    if (lp_half_order > 8) { // high-band specific
-        lsp2polyf_16k(isp,     pa, lp_half_order);
-        lsp2polyf_16k(isp + 1, qa, lp_half_order - 1);
-
-        for (i = 0; i <= lp_half_order; i++)
-            pa[i] *= 4.0;
-        for (i = 0; i < lp_half_order; i++)
-            qa[i] *= 4.0;
-    } else {
-        ff_lsp2polyf(isp,     pa, lp_half_order);
-        ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
-    }
+    ff_lsp2polyf(isp,     pa, lp_half_order);
+    ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
 
     for (i = 1; i < lp_half_order; i++) {
         double paf = (1 + last_isp) * pa[i];
@@ -683,8 +621,8 @@ static void decode_gains(const uint8_t vq_gain, const enum Mode mode,
     const int16_t *gains = (mode <= MODE_8k85 ? qua_gain_6b[vq_gain] :
                                                 qua_gain_7b[vq_gain]);
 
-    *pitch_gain        = gains[0] / (float) (1 << 14);
-    *fixed_gain_factor = gains[1] / (float) (1 << 11);
+    *pitch_gain        = gains[0] * (1.0f / (1 << 14));
+    *fixed_gain_factor = gains[1] * (1.0f / (1 << 11));
 }
 
 /**
@@ -842,10 +780,10 @@ static float noise_enhancer(float fixed_gain, float *prev_tr_gain,
     // be simpler
     if (fixed_gain < *prev_tr_gain) {
         g0 = FFMIN(*prev_tr_gain, fixed_gain + fixed_gain *
-                     (6226 / (float) (1 << 15))); // +1.5 dB
+                     (6226 * (1.0f / (1 << 15)))); // +1.5 dB
     } else
         g0 = FFMAX(*prev_tr_gain, fixed_gain *
-                    (27536 / (float) (1 << 15))); // -1.5 dB
+                    (27536 * (1.0f / (1 << 15)))); // -1.5 dB
 
     *prev_tr_gain = g0; // update next frame threshold
 
@@ -977,18 +915,25 @@ static void high_pass_filter(float *out, const float hpf_coef[2][3],
 static void upsample_5_4(float *out, const float *in, int o_size)
 {
     const float *in0 = in - UPS_FIR_SIZE + 1;
-    int i;
+    int i, j, k;
+    int int_part = 0, frac_part = 0;
 
-    for (i = 0; i < o_size; i++) {
-        int int_part  = (4 * i) / 5;
-        int frac_part = (4 * i) - 5 * int_part;
+    i = 0;
+    for (j = 0; j < o_size / 5; j++)
+        for (k = 0; k < 5; k++) {
+            if (!frac_part) {
+                out[i] = in[int_part];
+            } else
+                out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
+                                         UPS_MEM_SIZE);
 
-        if (!frac_part) {
-            out[i] = in[int_part];
-        } else
-            out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
-                                     UPS_MEM_SIZE);
-    }
+            frac_part += 4;
+            if (frac_part >= 5) {
+                frac_part -= 5;
+                int_part++;
+            }
+            i++;
+        }
 }
 
 /**
@@ -1007,7 +952,7 @@ static float find_hb_gain(AMRWBContext *ctx, const float *synth,
     float tilt;
 
     if (ctx->fr_cur_mode == MODE_23k85)
-        return qua_hb_gain[hb_idx] / (float) (1 << 14);
+        return qua_hb_gain[hb_idx] * (1.0f / (1 << 14));
 
     tilt = ff_dot_productf(synth, synth + 1, AMRWB_SFR_SIZE - 1) /
            ff_dot_productf(synth, synth, AMRWB_SFR_SIZE);
@@ -1115,7 +1060,7 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
         }
 
     for (i = LP_ORDER - 1; i < LP_ORDER_16k - 1; i++)
-        out[i] = out[i - 1] + diff_hi[i] / (float) (1 << 15);
+        out[i] = out[i - 1] + diff_hi[i] * (1.0f / (1 << 15));
 
     /* Scale the ISF vector for 16000 Hz */
     for (i = 0; i < LP_ORDER_16k - 1; i++)
@@ -1251,7 +1196,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
 
-    if (ctx->fr_cur_mode == MODE_SID) {
+    if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
         av_log_missing_feature(avctx, "SID mode", 1);
         return -1;
     }
@@ -1261,14 +1206,13 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     /* Decode the quantized ISF vector */
     if (ctx->fr_cur_mode == MODE_6k60) {
-        decode_isf_indices_36b(cf->isp_id, ctx->isf_cur, ctx->fr_quality);
-    }
-    else {
-        decode_isf_indices_46b(cf->isp_id, ctx->isf_cur, ctx->fr_quality);
+        decode_isf_indices_36b(cf->isp_id, ctx->isf_cur);
+    } else {
+        decode_isf_indices_46b(cf->isp_id, ctx->isf_cur);
     }
 
     isf_add_mean_and_past(ctx->isf_cur, ctx->isf_q_past);
-    isf_set_min_dist(ctx->isf_cur, MIN_ISF_SPACING, LP_ORDER);
+    ff_set_min_dist_lsf(ctx->isf_cur, MIN_ISF_SPACING, LP_ORDER - 1);
 
     stab_fac = stability_factor(ctx->isf_cur, ctx->isf_past_final);
 
