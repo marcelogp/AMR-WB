@@ -916,24 +916,22 @@ static void upsample_5_4(float *out, const float *in, int o_size)
 {
     const float *in0 = in - UPS_FIR_SIZE + 1;
     int i, j, k;
-    int int_part = 0, frac_part = 0;
+    int int_part = 0, frac_part;
 
     i = 0;
-    for (j = 0; j < o_size / 5; j++)
-        for (k = 0; k < 5; k++) {
-            if (!frac_part) {
-                out[i] = in[int_part];
-            } else
-                out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
-                                         UPS_MEM_SIZE);
+    for (j = 0; j < o_size / 5; j++) {
+        out[i] = in[int_part];
+        frac_part = 4;
+        i++;
 
-            frac_part += 4;
-            if (frac_part >= 5) {
-                frac_part -= 5;
-                int_part++;
-            }
+        for (k = 1; k < 5; k++) {
+            out[i] = ff_dot_productf(in0 + int_part, upsample_fir[4 - frac_part],
+                                     UPS_MEM_SIZE);
+            int_part++;
+            frac_part--;
             i++;
         }
+    }
 }
 
 /**
@@ -980,11 +978,9 @@ static void scaled_hb_excitation(AMRWBContext *ctx, float *hb_exc,
     for (i = 0; i < AMRWB_SFR_SIZE_16k; i++)
         hb_exc[i] = 32768.0 - (uint16_t) av_lfg_get(&ctx->prng);
 
-    ff_scale_vector_to_given_sum_of_squares(hb_exc, hb_exc, energy,
+    ff_scale_vector_to_given_sum_of_squares(hb_exc, hb_exc,
+                                            energy * hb_gain * hb_gain,
                                             AMRWB_SFR_SIZE_16k);
-
-    for (i = 0; i < AMRWB_SFR_SIZE_16k; i++)
-        hb_exc[i] *= hb_gain;
 }
 
 /**
