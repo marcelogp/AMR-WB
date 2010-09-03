@@ -144,8 +144,7 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
             while (field_size--) {
                uint16_t bit_idx = *perm++;
                field <<= 1;
-               /* The bit index inside the byte is reversed (MSB->LSB) */
-               field |= BIT_POS(buf[bit_idx >> 3], 7 - (bit_idx & 7));
+               field |= BIT_POS(buf[bit_idx >> 3], bit_idx & 7);
             }
             data[field_offset] = field;
         }
