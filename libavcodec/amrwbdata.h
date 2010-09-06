@@ -1803,16 +1803,13 @@ static const float *ir_filters_lookup[2] = {
     ir_filter_str, ir_filter_mid
 };
 
-/** High-pass filters coefficients for inputs and outputs (feedback) */
-static const float hpf_31_coef[2][3] = {        //  31 kHz cutoff filter
-    { 0.989501953, -1.979003906, 0.989501953 },
-    { 1.978881836, -0.979125977, 0           }
-};
+/** High-pass filters coefficients for 31 Hz and 400 Hz cutoff */
+static const float hpf_zeros[2]    = { -2.0, 1.0 };
+static const float hpf_31_poles[2] = { -1.978881836, 0.979125977 };
+static const float hpf_31_gain     = 0.989501953;
 
-static const float hpf_400_coef[2][3] = {       // 400 kHz cutoff filter
-    { 0.893554687, -1.787109375, 0.893554687 },
-    { 1.787109375, -0.864257812, 0           }
-};
+static const float hpf_400_poles[2] = { -1.787109375, 0.864257812 };
+static const float hpf_400_gain     = 0.893554687;
 
 /** Interpolation coefficients for 5/4 signal upsampling
  * Table from the reference source was reordered for efficiency */

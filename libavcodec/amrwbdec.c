@@ -1196,15 +1196,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         de_emphasis(&ctx->samples_up[UPS_MEM_SIZE],
                     &ctx->samples_az[LP_ORDER], PREEMPH_FAC, ctx->demph_mem);
 
-        high_pass_filter(&ctx->samples_up[UPS_MEM_SIZE], hpf_31_coef,
-                         ctx->hpf_31_mem, &ctx->samples_up[UPS_MEM_SIZE]);
+        ff_acelp_apply_order_2_transfer_function(&ctx->samples_up[UPS_MEM_SIZE],
+            &ctx->samples_up[UPS_MEM_SIZE], hpf_zeros, hpf_31_poles,
+            hpf_31_gain, ctx->hpf_31_mem, AMRWB_SFR_SIZE);
 
         upsample_5_4(sub_buf, &ctx->samples_up[UPS_FIR_SIZE],
                      AMRWB_SFR_SIZE_16k);
 
         /* High frequency band (6.4 - 7.0 kHz) generation part */
-        high_pass_filter(hb_samples, hpf_400_coef, ctx->hpf_400_mem,
-                         &ctx->samples_up[UPS_MEM_SIZE]);
+        ff_acelp_apply_order_2_transfer_function(hb_samples,
+            &ctx->samples_up[UPS_MEM_SIZE], hpf_zeros, hpf_400_poles,
+            hpf_400_gain, ctx->hpf_400_mem, AMRWB_SFR_SIZE);
 
         hb_gain = find_hb_gain(ctx, hb_samples,
                                cur_subframe->hb_gain, cf->vad);
