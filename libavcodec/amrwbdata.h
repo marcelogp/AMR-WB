@@ -30,7 +30,7 @@
 #define UPS_MEM_SIZE          (2 * UPS_FIR_SIZE)
 #define HB_FIR_SIZE           30               ///< amount of past data needed by HB filters
 
-#define MIN_ISF_SPACING       (50.0 / 32768.0) ///< minimum isf gap
+#define MIN_ISF_SPACING       (128.0 / 32768.0)///< minimum isf gap
 #define PRED_FACTOR           (1.0 / 3.0)
 #define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
 #define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
