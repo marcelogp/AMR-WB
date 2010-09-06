@@ -116,7 +116,6 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
                                   int buf_size)
 {
     GetBitContext gb;
-    uint16_t *data;
 
     init_get_bits(&gb, buf, buf_size * 8);
 
@@ -130,25 +129,9 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
     // used by libopencore. This format is simpler and
     // does not carry the auxiliary information of the frame
 
-    data = (uint16_t *) &ctx->frame;
-    memset(data, 0, sizeof(AMRWBFrame));
-    buf++;
-
-    if (ctx->fr_cur_mode < MODE_SID) { /* Normal speech frame */
-        const uint16_t *perm = amr_bit_orderings_by_mode[ctx->fr_cur_mode];
-        int field_size;
-
-        while ((field_size = *perm++)) {
-            int field = 0;
-            int field_offset = *perm++;
-            while (field_size--) {
-               uint16_t bit_idx = *perm++;
-               field <<= 1;
-               field |= BIT_POS(buf[bit_idx >> 3], bit_idx & 7);
-            }
-            data[field_offset] = field;
-        }
-    }
+    if (ctx->fr_cur_mode < MODE_SID) /* Normal speech frame */
+        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame), buf + 1,
+                           amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
 
     return ctx->fr_cur_mode;
 }
