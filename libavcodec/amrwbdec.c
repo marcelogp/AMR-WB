@@ -48,7 +48,7 @@ typedef struct {
     double                      isp[4][LP_ORDER]; ///< ISP vectors from current frame
     double               isp_sub4_past[LP_ORDER]; ///< ISP vector for the 4th subframe of the previous frame
 
-    float               lp_coef[4][LP_ORDER + 1]; ///< Linear Prediction Coefficients from ISP vector
+    float                   lp_coef[4][LP_ORDER]; ///< Linear Prediction Coefficients from ISP vector
 
     uint8_t                       base_pitch_lag; ///< integer part of pitch lag for the next relative subframe
     uint8_t                        pitch_lag_int; ///< integer part of pitch lag of the previous subframe
@@ -154,23 +154,6 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
 }
 
 /**
- * Convert an ISF vector into an ISP vector
- *
- * @param[in] isf                  Isf vector
- * @param[out] isp                 Output isp vector
- * @param[in] size                 Isf/isp size
- */
-static void isf2isp(const float *isf, double *isp, int size)
-{
-    int i;
-
-    for (i = 0; i < size - 1; i++)
-        isp[i] = cos(2.0 * M_PI * isf[i]);
-
-    isp[size - 1] = cos(4.0 * M_PI * isf[size - 1]);
-}
-
-/**
  * Decodes quantized ISF vectors using 36-bit indices (6K60 mode only)
  *
  * @param[in] ind                  Array of 5 indices
@@ -266,39 +249,6 @@ static void interpolate_isp(double isp_q[4][LP_ORDER], const double *isp4_past)
         for (i = 0; i < LP_ORDER; i++)
             isp_q[k][i] = (1.0 - c) * isp4_past[i] + c * isp_q[3][i];
     }
-}
-
-/**
- * Convert a ISP vector to LP coefficient domain {a_k}
- * Equations from TS 26.190 section 5.2.4
- *
- * @param[in] isp                  ISP vector for a subframe
- * @param[out] lp                  LP coefficients
- * @param[in] lp_half_order        Half the number of LPs to construct
- */
-static void isp2lp(const double *isp, float *lp, int lp_half_order) {
-    double pa[10 + 1], qa[10 + 1];
-    double last_isp = isp[2 * lp_half_order - 1];
-    double qa_old = 0.0;
-    float *lp2 = &lp[2 * lp_half_order];
-    int i;
-
-    ff_lsp2polyf(isp,     pa, lp_half_order);
-    ff_lsp2polyf(isp + 1, qa, lp_half_order - 1);
-
-    for (i = 1; i < lp_half_order; i++) {
-        double paf = (1 + last_isp) * pa[i];
-        double qaf = (1 - last_isp) * (qa[i] - qa_old);
-
-        qa_old = qa[i - 1];
-
-        lp[i]   = 0.5 * (paf + qaf);
-        lp2[-i] = 0.5 * (paf - qaf);
-    }
-
-    lp[0] = 1.0;
-    lp[lp_half_order] = 0.5 * (1 + last_isp) * pa[lp_half_order];
-    lp2[0] = last_isp;
 }
 
 /**
@@ -847,7 +797,7 @@ static void synthesis(AMRWBContext *ctx, float *lpc, float *excitation,
                                                 energy, AMRWB_SFR_SIZE);
     }
 
-    ff_celp_lp_synthesis_filterf(samples, lpc + 1, excitation,
+    ff_celp_lp_synthesis_filterf(samples, lpc, excitation,
                                  AMRWB_SFR_SIZE, LP_ORDER);
 }
 
@@ -870,37 +820,6 @@ static void de_emphasis(float *out, float *in, float m, float mem[1])
          out[i] = in[i] + out[i - 1] * m;
 
     mem[0] = out[AMRWB_SFR_SIZE - 1];
-}
-
-/**
- * Apply to synthesis a 2nd order high-pass filter
- *
- * @param[out] out                 Buffer for filtered output
- * @param[in] hpf_coef             Filter coefficients as used below
- * @param[in,out] mem              State from last filtering (updated)
- * @param[in] in                   Input speech data
- *
- * @remark It is safe to pass the same array in in and out parameters
- */
-static void high_pass_filter(float *out, const float hpf_coef[2][3],
-                             float mem[4], const float *in)
-{
-    int i;
-    float *x = mem - 1, *y = mem + 2; // previous inputs and outputs
-
-    for (i = 0; i < AMRWB_SFR_SIZE; i++) {
-        float x0 = in[i];
-
-        out[i] = hpf_coef[0][0] * x0   + hpf_coef[1][0] * y[0] +
-                 hpf_coef[0][1] * x[1] + hpf_coef[1][1] * y[1] +
-                 hpf_coef[0][2] * x[2];
-
-        y[1] = y[0];
-        y[0] = out[i];
-
-        x[2] = x[1];
-        x[1] = x0;
-    }
 }
 
 /**
@@ -1074,7 +993,7 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
 static void lpc_weighting(float *out, const float *lpc, float gamma, int size)
 {
     int i;
-    float fac = 1.0;
+    float fac = gamma;
 
     for (i = 0; i < size; i++) {
         out[i] = lpc[i] * fac;
@@ -1096,7 +1015,7 @@ static void lpc_weighting(float *out, const float *lpc, float gamma, int size)
 static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
                          const float *exc, const float *isf, const float *isf_past)
 {
-    float hb_lpc[LP_ORDER_16k + 1];
+    float hb_lpc[LP_ORDER_16k];
     enum Mode mode = ctx->fr_cur_mode;
 
     if (mode == MODE_6k60) {
@@ -1107,15 +1026,17 @@ static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
                                 1.0 - isfp_inter[subframe], LP_ORDER);
 
         extrapolate_isf(e_isf, e_isf);
-        isf2isp(e_isf, e_isp, LP_ORDER_16k);
-        isp2lp(e_isp, hb_lpc, LP_ORDER_16k / 2);
 
-        lpc_weighting(hb_lpc, hb_lpc, 0.9, LP_ORDER_16k + 1);
+        e_isf[LP_ORDER_16k - 1] *= 2.0;
+        ff_acelp_lsf2lspd(e_isp, e_isf, LP_ORDER_16k);
+        ff_amrwb_lsp2lpc(e_isp, hb_lpc, LP_ORDER_16k);
+
+        lpc_weighting(hb_lpc, hb_lpc, 0.9, LP_ORDER_16k);
     } else {
-        lpc_weighting(hb_lpc, ctx->lp_coef[subframe], 0.6, LP_ORDER + 1);
+        lpc_weighting(hb_lpc, ctx->lp_coef[subframe], 0.6, LP_ORDER);
     }
 
-    ff_celp_lp_synthesis_filterf(samples, hb_lpc + 1, exc, AMRWB_SFR_SIZE_16k,
+    ff_celp_lp_synthesis_filterf(samples, hb_lpc, exc, AMRWB_SFR_SIZE_16k,
                                  (mode == MODE_6k60) ? LP_ORDER_16k : LP_ORDER);
 }
 
@@ -1211,7 +1132,9 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
     stab_fac = stability_factor(ctx->isf_cur, ctx->isf_past_final);
 
-    isf2isp(ctx->isf_cur, ctx->isp[3], LP_ORDER);
+    ctx->isf_cur[LP_ORDER - 1] *= 2.0;
+    ff_acelp_lsf2lspd(ctx->isp[3], ctx->isf_cur, LP_ORDER);
+
     /* Generate a ISP vector for each subframe */
     if (ctx->first_frame) {
         ctx->first_frame = 0;
@@ -1220,7 +1143,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     interpolate_isp(ctx->isp, ctx->isp_sub4_past);
 
     for (sub = 0; sub < 4; sub++)
-        isp2lp(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER / 2);
+        ff_amrwb_lsp2lpc(ctx->isp[sub], ctx->lp_coef[sub], LP_ORDER);
 
     for (sub = 0; sub < 4; sub++) {
         const AMRWBSubFrame *cur_subframe = &cf->subframe[sub];
