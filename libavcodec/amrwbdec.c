@@ -32,12 +32,6 @@
 
 #include "amrwbdata.h"
 
-/** Get x bits in the index interval [lsb,lsb+len-1] inclusive */
-#define BIT_STR(x,lsb,len) (((x) >> (lsb)) & ((1 << (len)) - 1))
-
-/** Get the bit at specified position */
-#define BIT_POS(x, p) (((x) >> (p)) & 1)
-
 typedef struct {
     AMRWBFrame                             frame; ///< AMRWB parameters decoded from bitstream
     enum Mode                        fr_cur_mode; ///< mode index of current frame
@@ -344,6 +338,12 @@ static void decode_pitch_vector(AMRWBContext *ctx,
         memcpy(exc, ctx->pitch_vector, AMRWB_SFR_SIZE * sizeof(float));
     }
 }
+
+/** Get x bits in the index interval [lsb,lsb+len-1] inclusive */
+#define BIT_STR(x,lsb,len) (((x) >> (lsb)) & ((1 << (len)) - 1))
+
+/** Get the bit at specified position */
+#define BIT_POS(x, p) (((x) >> (p)) & 1)
 
 /**
  * The next six functions decode_[i]p_track decode exactly i pulses
@@ -923,7 +923,7 @@ static void extrapolate_isf(float out[LP_ORDER_16k], float isf[LP_ORDER])
 
     diff_mean = 0.0;
     for (i = 2; i < LP_ORDER - 2; i++)
-        diff_mean += diff_isf[i] / (LP_ORDER - 4);
+        diff_mean += diff_isf[i] * (1.0f / (LP_ORDER - 4));
 
     /* Find which is the maximum autocorrelation */
     i_max_corr = 0;
@@ -1030,21 +1030,18 @@ static void hb_synthesis(AMRWBContext *ctx, int subframe, float *samples,
  * @param[out] out                 Buffer for filtered output
  * @param[in] fir_coef             Filter coefficients
  * @param[in,out] mem              State from last filtering (updated)
- * @param[in] cp_gain              Compensation gain (usually the filter gain)
  * @param[in] in                   Input speech data (high-band)
  *
  * @remark It is safe to pass the same array in in and out parameters
  */
 static void hb_fir_filter(float *out, const float fir_coef[HB_FIR_SIZE + 1],
-                          float mem[HB_FIR_SIZE], float cp_gain, const float *in)
+                          float mem[HB_FIR_SIZE], const float *in)
 {
     int i, j;
     float data[AMRWB_SFR_SIZE_16k + HB_FIR_SIZE]; // past and current samples
 
     memcpy(data, mem, HB_FIR_SIZE * sizeof(float));
-
-    for (i = 0; i < AMRWB_SFR_SIZE_16k; i++)
-        data[i + HB_FIR_SIZE] = in[i] / cp_gain;
+    memcpy(data + HB_FIR_SIZE, in, AMRWB_SFR_SIZE_16k * sizeof(float));
 
     for (i = 0; i < AMRWB_SFR_SIZE_16k; i++) {
         out[i] = 0.0;
@@ -1081,6 +1078,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     AMRWBFrame   *cf   = &ctx->frame;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
+    int expected_fr_size;
     float *buf_out = data;
     float spare_vector[AMRWB_SFR_SIZE];      // extra stack space to hold result from anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
@@ -1094,6 +1092,14 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     int sub, i;
 
     ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
+    expected_fr_size = ((cf_sizes_wb[ctx->fr_cur_mode] + 7) >> 3) + 1;
+
+    if (buf_size < expected_fr_size) {
+        av_log(avctx, AV_LOG_ERROR,
+            "Frame too small (%d bytes). Truncated file?\n", buf_size);
+        *data_size = 0;
+        return buf_size;
+    }
 
     if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
         av_log_missing_feature(avctx, "SID mode", 1);
@@ -1201,17 +1207,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
 
         /* High-band post-processing filters */
         hb_fir_filter(hb_samples, bpf_6_7_coef, ctx->bpf_6_7_mem,
-                      4.0, &ctx->samples_hb[LP_ORDER_16k]);
+                      &ctx->samples_hb[LP_ORDER_16k]);
 
         if (ctx->fr_cur_mode == MODE_23k85)
             hb_fir_filter(hb_samples, lpf_7_coef, ctx->lpf_7_mem,
-                          1.0, hb_samples);
+                          hb_samples);
 
         /* Add the low and high frequency bands */
         for (i = 0; i < AMRWB_SFR_SIZE_16k; i++) {
             // XXX: the low-band should really be upscaled by 2.0? This
             // way the output volume level seems doubled
-            sub_buf[i] = (sub_buf[i] + hb_samples[i]) / 32768.0;
+            sub_buf[i] = (sub_buf[i] + hb_samples[i]) * (1.0f / (1 << 15));
         }
 
         /* Update buffers and history */
@@ -1225,7 +1231,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     /* report how many samples we got */
     *data_size = 4 * AMRWB_SFR_SIZE_16k * sizeof(float);
 
-    return ((cf_sizes_wb[ctx->fr_cur_mode] + 7) >> 3) + 1;
+    return expected_fr_size;
 }
 
 AVCodec amrwb_decoder =
