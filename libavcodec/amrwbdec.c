@@ -255,7 +255,7 @@ static void decode_pitch_lag_high(int *lag_int, int *lag_frac, int pitch_index,
             *lag_frac = 0;
         }
         /* minimum lag for next subframe */
-        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0 ? 1 : 0),
+        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0),
                                 AMRWB_P_DELAY_MIN, AMRWB_P_DELAY_MAX - 15);
         // XXX: the spec states clearly that *base_lag_int should be
         // the nearest integer to *lag_int (minus 8), but the ref code
@@ -284,7 +284,7 @@ static void decode_pitch_lag_low(int *lag_int, int *lag_frac, int pitch_index,
             *lag_frac = 0;
         }
         // XXX: same problem as before
-        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0 ? 1 : 0),
+        *base_lag_int = av_clip(*lag_int - 8 - (*lag_frac < 0),
                                 AMRWB_P_DELAY_MIN, AMRWB_P_DELAY_MAX - 15);
     } else {
         *lag_int  = (pitch_index + 1) >> 1;
@@ -318,7 +318,7 @@ static void decode_pitch_vector(AMRWBContext *ctx,
                               &ctx->base_pitch_lag, subframe);
 
     ctx->pitch_lag_int = pitch_lag_int;
-    pitch_lag_int     += (pitch_lag_frac < 0 ? -1 : 0) + (pitch_lag_frac ? 1 : 0);
+    pitch_lag_int += pitch_lag_frac > 0;
 
     /* Calculate the pitch vector by interpolating the past excitation at the
        pitch lag using a hamming windowed sinc function */
@@ -643,10 +643,10 @@ static float *anti_sparseness(AMRWBContext *ctx,
     /* update ir filter strength history */
     ctx->prev_ir_filter_nr = ir_filter_nr;
 
-    ir_filter_nr += (ctx->fr_cur_mode == MODE_8k85 ? 1 : 0);
+    ir_filter_nr += (ctx->fr_cur_mode == MODE_8k85);
 
     if (ir_filter_nr < 2) {
-        int i, j;
+        int i;
         const float *coef = ir_filters_lookup[ir_filter_nr];
 
         /* Circular convolution code in the reference
@@ -658,15 +658,9 @@ static float *anti_sparseness(AMRWBContext *ctx,
 
         memset(buf, 0, sizeof(float) * AMRWB_SFR_SIZE);
         for (i = 0; i < AMRWB_SFR_SIZE; i++)
-            if (fixed_vector[i]) {
-                int li = AMRWB_SFR_SIZE - i;
-
-                for (j = 0; j < li; j++)
-                    buf[i + j] += fixed_vector[i] * coef[j];
-
-                for (j = 0; j < i; j++)
-                    buf[j] += fixed_vector[i] * coef[j + li];
-            }
+            if (fixed_vector[i])
+                ff_celp_circ_addf(buf, buf, coef, i, fixed_vector[i],
+                                  AMRWB_SFR_SIZE);
         fixed_vector = buf;
     }
 
@@ -847,7 +841,7 @@ static void upsample_5_4(float *out, const float *in, int o_size)
 static float find_hb_gain(AMRWBContext *ctx, const float *synth,
                           uint16_t hb_idx, uint8_t vad)
 {
-    int wsp = (vad > 0 ? 1 : 0);
+    int wsp = (vad > 0);
     float tilt;
 
     if (ctx->fr_cur_mode == MODE_23k85)
