@@ -29,6 +29,8 @@
 #include "acelp_filters.h"
 #include "acelp_vectors.h"
 #include "acelp_pitch_delay.h"
+
+#define AMR_USE_16BIT_TABLES
 #include "amr.h"
 
 #include "amrwbdata.h"
