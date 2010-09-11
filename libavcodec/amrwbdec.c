@@ -29,6 +29,7 @@
 #include "acelp_filters.h"
 #include "acelp_vectors.h"
 #include "acelp_pitch_delay.h"
+#include "amr.h"
 
 #include "amrwbdata.h"
 
@@ -67,7 +68,7 @@ typedef struct {
     float samples_up[UPS_MEM_SIZE + AMRWB_SFR_SIZE];     ///< low-band samples and memory processed for upsampling
     float samples_hb[LP_ORDER_16k + AMRWB_SFR_SIZE_16k]; ///< high-band samples and memory from synthesis at 16kHz
 
-    float          hpf_31_mem[4], hpf_400_mem[4]; ///< previous values in the high pass filters
+    float          hpf_31_mem[2], hpf_400_mem[2]; ///< previous values in the high pass filters
     float                           demph_mem[1]; ///< previous value in the de-emphasis filter
     float               bpf_6_7_mem[HB_FIR_SIZE]; ///< previous values in the high-band band pass filter
     float                 lpf_7_mem[HB_FIR_SIZE]; ///< previous values in the high-band low pass filter

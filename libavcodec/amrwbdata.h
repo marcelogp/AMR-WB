@@ -1647,7 +1647,7 @@ static const float ac_inter[65] = {
 };
 
 /** [i][j] is the number of pulses present in track j at mode i */
-static const int pulses_nb_per_mode_tr[][4] = {
+static const uint8_t pulses_nb_per_mode_tr[][4] = {
     {1, 1, 0, 0}, {1, 1, 1, 1}, {2, 2, 2, 2},
     {3, 3, 2, 2}, {3, 3, 3, 3}, {4, 4, 4, 4},
     {5, 5, 4, 4}, {6, 6, 6, 6}, {6, 6, 6, 6}
