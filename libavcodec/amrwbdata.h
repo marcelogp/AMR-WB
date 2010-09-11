@@ -24,22 +24,22 @@
 
 #include <stdint.h>
 
-#define LP_ORDER              16               ///< linear predictive coding filter order
-#define LP_ORDER_16k          20               ///< lpc filter order at 16kHz
-#define UPS_FIR_SIZE          12               ///< upsampling filter size
-#define UPS_MEM_SIZE          (2 * UPS_FIR_SIZE)
-#define HB_FIR_SIZE           30               ///< amount of past data needed by HB filters
+#define LP_ORDER            16                ///< linear predictive coding filter order
+#define LP_ORDER_16k        20                ///< lpc filter order at 16kHz
+#define HB_FIR_SIZE         30                ///< amount of past data needed by HB filters
+#define UPS_FIR_SIZE        12                ///< upsampling filter size
+#define UPS_MEM_SIZE        (2 * UPS_FIR_SIZE)
 
-#define MIN_ISF_SPACING       (128.0 / 32768.0)///< minimum isf gap
-#define PRED_FACTOR           (1.0 / 3.0)
-#define MIN_ENERGY           -14.0             ///< initial innnovation energy (dB)
-#define ENERGY_MEAN           30.0             ///< mean innovation energy (dB) in all modes
-#define PREEMPH_FAC           0.68             ///< factor used to de-emphasize synthesis
+#define MIN_ISF_SPACING     (128.0 / 32768.0) ///< minimum isf gap
+#define PRED_FACTOR         (1.0 / 3.0)
+#define MIN_ENERGY         -14.0              ///< initial innnovation energy (dB)
+#define ENERGY_MEAN         30.0              ///< mean innovation energy (dB) in all modes
+#define PREEMPH_FAC         0.68              ///< factor used to de-emphasize synthesis
 
-#define AMRWB_SFR_SIZE        64               ///< samples per subframe at 12.8 kHz
-#define AMRWB_SFR_SIZE_16k    80               ///< samples per subframe at 16 kHz
-#define AMRWB_P_DELAY_MAX     231              ///< maximum pitch delay value
-#define AMRWB_P_DELAY_MIN     34
+#define AMRWB_SFR_SIZE      64                ///< samples per subframe at 12.8 kHz
+#define AMRWB_SFR_SIZE_16k  80                ///< samples per subframe at 16 kHz
+#define AMRWB_P_DELAY_MAX   231               ///< maximum pitch delay value
+#define AMRWB_P_DELAY_MIN   34
 
 /* Relative mode ordering is sensitive */
 enum Mode {
@@ -1804,9 +1804,9 @@ static const float *ir_filters_lookup[2] = {
 };
 
 /** High-pass filters coefficients for 31 Hz and 400 Hz cutoff */
-static const float hpf_zeros[2]    = { -2.0, 1.0 };
-static const float hpf_31_poles[2] = { -1.978881836, 0.979125977 };
-static const float hpf_31_gain     = 0.989501953;
+static const float hpf_zeros[2]     = { -2.0, 1.0 };
+static const float hpf_31_poles[2]  = { -1.978881836, 0.979125977 };
+static const float hpf_31_gain      = 0.989501953;
 
 static const float hpf_400_poles[2] = { -1.787109375, 0.864257812 };
 static const float hpf_400_gain     = 0.893554687;
