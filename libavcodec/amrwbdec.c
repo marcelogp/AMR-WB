@@ -1091,18 +1091,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         return buf_size;
     }
 
-    if (!ctx->fr_quality || ctx->fr_cur_mode > MODE_SID) {
+    if (!ctx->fr_quality || ctx->fr_cur_mode > MODE_SID)
         av_log(avctx, AV_LOG_ERROR, "Encountered a bad or corrupted frame\n");
-    }
 
-    if (ctx->fr_cur_mode < MODE_SID) { /* Normal speech frame */
-        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame),
-            buf + header_size, amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
-    }
-    else if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
+    if (ctx->fr_cur_mode == MODE_SID) /* Comfort noise frame */
         av_log_missing_feature(avctx, "SID mode", 1);
+
+    if (ctx->fr_cur_mode >= MODE_SID)
         return -1;
-    }
+
+    ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame),
+        buf + header_size, amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
 
     /* Decode the quantized ISF vector */
     if (ctx->fr_cur_mode == MODE_6k60) {
