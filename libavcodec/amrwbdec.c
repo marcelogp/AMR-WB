@@ -106,8 +106,10 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
  *
  * @param[in] ctx                  The Context
  * @param[in] buf                  Pointer to the input buffer
+ *
+ * @return The decoded header length in bytes
  */ 
-static void decode_mime_header(AMRWBContext *ctx, const uint8_t *buf)
+static int decode_mime_header(AMRWBContext *ctx, const uint8_t *buf)
 {
     GetBitContext gb;
     init_get_bits(&gb, buf, 8);
@@ -117,6 +119,8 @@ static void decode_mime_header(AMRWBContext *ctx, const uint8_t *buf)
     ctx->fr_cur_mode  = get_bits(&gb, 4);
     ctx->fr_quality   = get_bits1(&gb);
     skip_bits(&gb, 2);  // padding bits
+
+    return 1;
 }
 
 /**
@@ -1064,7 +1068,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     AMRWBFrame   *cf   = &ctx->frame;
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
-    int expected_fr_size;
+    int expected_fr_size, header_size;
     float *buf_out = data;
     float spare_vector[AMRWB_SFR_SIZE];      // extra stack space to hold result from anti-sparseness processing
     float fixed_gain_factor;                 // fixed gain correction factor (gamma)
@@ -1077,7 +1081,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float hb_gain;
     int sub, i;
 
-    decode_mime_header(ctx, buf);
+    header_size      = decode_mime_header(ctx, buf);
     expected_fr_size = ((cf_sizes_wb[ctx->fr_cur_mode] + 7) >> 3) + 1;
 
     if (buf_size < expected_fr_size) {
@@ -1092,8 +1096,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     }
 
     if (ctx->fr_cur_mode < MODE_SID) { /* Normal speech frame */
-        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame), buf + 1,
-                           amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
+        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame),
+            buf + header_size, amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
     }
     else if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
         av_log_missing_feature(avctx, "SID mode", 1);
