@@ -101,36 +101,22 @@ static av_cold int amrwb_decode_init(AVCodecContext *avctx)
 }
 
 /**
- * Parses a speech frame, storing data in the Context
+ * Decode the frame header in the "MIME/storage" format. This format
+ * is simpler and does not carry the auxiliary information of the frame
  *
- * @param[in,out] ctx              The context
+ * @param[in] ctx                  The Context
  * @param[in] buf                  Pointer to the input buffer
- * @param[in] buf_size             Size of the input buffer
- *
- * @return The frame mode
- */
-static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
-                                  int buf_size)
+ */ 
+static void decode_mime_header(AMRWBContext *ctx, const uint8_t *buf)
 {
     GetBitContext gb;
+    init_get_bits(&gb, buf, 8);
 
-    init_get_bits(&gb, buf, buf_size * 8);
-
-    /* decode frame header (1st octet) */
+    /* Decode frame header (1st octet) */
     skip_bits(&gb, 1);  // padding bit
     ctx->fr_cur_mode  = get_bits(&gb, 4);
     ctx->fr_quality   = get_bits1(&gb);
     skip_bits(&gb, 2);  // padding bits
-
-    // XXX: We are using only the "MIME/storage" format
-    // used by libopencore. This format is simpler and
-    // does not carry the auxiliary information of the frame
-
-    if (ctx->fr_cur_mode < MODE_SID) /* Normal speech frame */
-        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame), buf + 1,
-                           amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
-
-    return ctx->fr_cur_mode;
 }
 
 /**
@@ -140,7 +126,8 @@ static enum Mode unpack_bitstream(AMRWBContext *ctx, const uint8_t *buf,
  * @param[out] isf_q               Buffer for isf_q[LP_ORDER]
  *
  */
-static void decode_isf_indices_36b(uint16_t *ind, float *isf_q) {
+static void decode_isf_indices_36b(uint16_t *ind, float *isf_q)
+{
     int i;
 
     for (i = 0; i < 9; i++) {
@@ -167,7 +154,8 @@ static void decode_isf_indices_36b(uint16_t *ind, float *isf_q) {
  * @param[out] isf_q               Buffer for isf_q[LP_ORDER]
  *
  */
-static void decode_isf_indices_46b(uint16_t *ind, float *isf_q) {
+static void decode_isf_indices_46b(uint16_t *ind, float *isf_q)
+{
     int i;
 
     for (i = 0; i < 9; i++) {
@@ -201,7 +189,8 @@ static void decode_isf_indices_46b(uint16_t *ind, float *isf_q) {
  * @param[in,out] isf_past         Past quantized ISF
  *
  */
-static void isf_add_mean_and_past(float *isf_q, float *isf_past) {
+static void isf_add_mean_and_past(float *isf_q, float *isf_past)
+{
     int i;
     float tmp;
 
@@ -1088,7 +1077,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
     float hb_gain;
     int sub, i;
 
-    ctx->fr_cur_mode = unpack_bitstream(ctx, buf, buf_size);
+    decode_mime_header(ctx, buf);
     expected_fr_size = ((cf_sizes_wb[ctx->fr_cur_mode] + 7) >> 3) + 1;
 
     if (buf_size < expected_fr_size) {
@@ -1098,12 +1087,17 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         return buf_size;
     }
 
-    if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
+    if (!ctx->fr_quality || ctx->fr_cur_mode > MODE_SID) {
+        av_log(avctx, AV_LOG_ERROR, "Encountered a bad or corrupted frame\n");
+    }
+
+    if (ctx->fr_cur_mode < MODE_SID) { /* Normal speech frame */
+        ff_amr_bit_reorder((uint16_t *) &ctx->frame, sizeof(AMRWBFrame), buf + 1,
+                           amr_bit_orderings_by_mode[ctx->fr_cur_mode]);
+    }
+    else if (ctx->fr_cur_mode == MODE_SID) { /* Comfort noise frame */
         av_log_missing_feature(avctx, "SID mode", 1);
         return -1;
-    }
-    if (!ctx->fr_quality) {
-        av_log(avctx, AV_LOG_ERROR, "Encountered a bad or corrupted frame\n");
     }
 
     /* Decode the quantized ISF vector */
@@ -1162,8 +1156,7 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
         for (i = 0; i < AMRWB_SFR_SIZE; i++) {
             ctx->excitation[i] *= ctx->pitch_gain[0];
             ctx->excitation[i] += ctx->fixed_gain[0] * ctx->fixed_vector[i];
-            // XXX: Should remove fractional part of excitation like AMR-NB?
-            // I did not found a reference of this in the ref decoder
+            ctx->excitation[i] = truncf(ctx->excitation[i]);
         }
 
         /* Post-processing of excitation elements */
@@ -1211,11 +1204,8 @@ static int amrwb_decode_frame(AVCodecContext *avctx, void *data, int *data_size,
                           hb_samples);
 
         /* Add the low and high frequency bands */
-        for (i = 0; i < AMRWB_SFR_SIZE_16k; i++) {
-            // XXX: the low-band should really be upscaled by 2.0? This
-            // way the output volume level seems doubled
+        for (i = 0; i < AMRWB_SFR_SIZE_16k; i++)
             sub_buf[i] = (sub_buf[i] + hb_samples[i]) * (1.0f / (1 << 15));
-        }
 
         /* Update buffers and history */
         update_sub_state(ctx);
